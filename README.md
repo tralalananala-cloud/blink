@@ -30,6 +30,12 @@ it does not learn who sent them.
 - **Anti-MITM.** Safety numbers (SHA-256 over both real identity keys) with QR verification and key-change alerts.
 - **No telemetry, no analytics, no "calling home."**
 
+## Install
+
+- **Android (now):** download the latest signed APK from [Releases](https://github.com/tralalananala-cloud/blink/releases/latest) (`arm64-v8a` for most phones). Every build ships with a SHA-256 to verify.
+- **F-Droid / IzzyOnDroid (in progress):** Fastlane metadata lives in [`fastlane/`](fastlane/). Inclusion in the main F-Droid repo requires a Google-free build (the app currently uses Firebase Cloud Messaging for push) plus reproducible builds — both on the roadmap. An IzzyOnDroid listing (which builds from GitHub Releases and flags the FCM anti-feature) is the nearer-term path.
+- **Desktop / iOS:** not shipped yet — see [the website](https://blinkmessenger.vercel.app/download).
+
 ## Architecture
 
 ```

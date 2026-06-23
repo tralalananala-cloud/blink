@@ -1,0 +1,5 @@
+v1.1.2
+- Fixed app-lock password freeze
+- WebRTC calls (ICE/STUN, beta)
+- Security audit fixes (constant-time compare, reduced relay logging)
+- Sharded relay for higher concurrency

@@ -1,0 +1,17 @@
+Blink is a privacy-first, end-to-end-encrypted messenger. There is no phone number, no email and no account — your identity is a cryptographic key generated on your device, backed up by a 12-word recovery phrase.
+
+Messages are encrypted with the official libsignal protocol (X3DH + post-quantum PQXDH / Kyber-ML-KEM + Double Ratchet) — the same protocol family Signal uses, but without tying you to a phone number. The relay that forwards your messages is blind: it cannot read content, and with sealed sender it does not even learn who sent a message.
+
+Features:
+* End-to-end encryption by default — never a toggle
+* Post-quantum key exchange (PQXDH / Kyber-ML-KEM)
+* No phone number, no email, no PII — identity is a did:key + recovery phrase
+* Sealed sender — the relay does not see who sent a message
+* Anti-MITM safety numbers with QR verification and key-change alerts
+* Encrypted on-device storage (SQLite + ChaCha20-Poly1305)
+* App lock and per-conversation passwords, disappearing messages, anti-screenshot
+* No telemetry, no analytics, no ads
+
+Honest about limitations: the relay (on Cloudflare) can still see your IP address, timing and volume — sealed sender hides who you are at the app layer, not your network path. The app uses Google FCM for push notifications (no message content is sent through it). Our integration has not had an independent third-party audit; it builds on audited primitives (libsignal, @noble). See the threat model in the repository.
+
+Free software under the GNU AGPL-3.0. Full source, including the relay, is public.
