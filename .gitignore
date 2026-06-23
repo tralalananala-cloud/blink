@@ -1,0 +1,52 @@
+# dependencies
+node_modules/
+
+# expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# native
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# secrets — never commit
+.env
+.env.*
+*.pem
+
+# native build (regenerat de `expo prebuild --clean`)
+/android/
+/ios/
+*.apk
+*.aab
+
+# web export
+dist-web/
+
+# desktop (Electron) — artefacte de build mari
+desktop/node_modules/
+desktop/web/
+desktop/release/
+desktop/dist/
+
+# firebase / google services (conțin chei — nu se comit)
+google-services.json
+GoogleService-Info.plist
+**/fcm-sa.json
+
+# misc
+.DS_Store
+npm-debug.*
+*.log
+coverage/
+
+# artefacte vechi de distribuție (binare mari)
+artifacts/
+cipher-android.apk
+release-keystore/

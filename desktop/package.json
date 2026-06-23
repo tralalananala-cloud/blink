@@ -1,0 +1,29 @@
+{
+  "name": "cipher-desktop",
+  "version": "0.1.0",
+  "description": "Blink — desktop (Linux + Windows) prin Electron peste build-ul web Expo.",
+  "main": "main.js",
+  "author": "Cipher",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist:linux": "electron-builder --linux AppImage",
+    "dist:win": "electron-builder --win portable",
+    "dist:all": "electron-builder --linux AppImage --win portable"
+  },
+  "build": {
+    "appId": "io.blink.app",
+    "productName": "Blink",
+    "files": ["main.js", "web/**/*", "node_modules/**/*"],
+    "directories": { "output": "release" },
+    "linux": { "target": ["AppImage"], "category": "Network" },
+    "win": { "target": ["portable"] }
+  },
+  "dependencies": {
+    "serve-handler": "^6.1.6"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  }
+}

@@ -1,0 +1,28 @@
+# Blink relay — Fly.io. WebSocket store-and-forward, mereu pornit.
+app = "blink-relay"
+primary_region = "fra"  # Frankfurt — aproape de RO
+
+[build]
+
+[http_service]
+  internal_port = 8787
+  force_https = true            # wss:// la edge, app vorbeste ws plain intern
+  auto_stop_machines = false    # releu mereu treaz (store-and-forward + push)
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 200
+    hard_limit = 250
+
+[[http_service.checks]]
+  interval = "15s"
+  timeout = "2s"
+  grace_period = "5s"
+  method = "GET"
+  path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

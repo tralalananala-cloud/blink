@@ -1,0 +1,14 @@
+{
+  "name": "blink-relay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Blink — blind relay. Routes E2E-encrypted envelopes between devices, stores them for offline recipients. Never sees plaintext.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

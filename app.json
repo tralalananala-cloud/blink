@@ -1,0 +1,126 @@
+{
+  "expo": {
+    "name": "Blink",
+    "slug": "blink",
+    "owner": "user-tralala",
+    "version": "0.1.0",
+    "scheme": "blink",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": false,
+    "backgroundColor": "#0A0C10",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "backgroundColor": "#0A0C10",
+      "resizeMode": "contain"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "bundleIdentifier": "io.blink.app",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Blink uses the camera for QR pairing, photos and video messages.",
+        "NSMicrophoneUsageDescription": "Blink uses the microphone for voice messages and calls.",
+        "NSPhotoLibraryUsageDescription": "Blink lets you send photos and videos from your library.",
+        "NSFaceIDUsageDescription": "Blink can use Face ID to unlock the app."
+      },
+      "bitcode": false
+    },
+    "android": {
+      "package": "io.blink.app",
+      "googleServicesFile": "./google-services.json",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0A0C10"
+      },
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.INTERNET",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.WAKE_LOCK",
+        "android.permission.BLUETOOTH"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-local-authentication",
+      "expo-asset",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Blink accesează galeria ca să trimiți poze și video criptate."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Blink folosește camera pentru cerculețe video.",
+          "microphonePermission": "Blink folosește microfonul pentru mesaje vocale și cerculețe."
+        }
+      ],
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Blink folosește microfonul pentru mesaje vocale."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": false
+          }
+        }
+      ],
+      "./plugins/withLargeHeap",
+      "./plugins/withDesugaring",
+      "./plugins/withAbiSplits",
+      "./plugins/withReleaseSigning",
+      "@config-plugins/react-native-webrtc",
+      [
+        "react-native-libsignal-client",
+        {
+          "ios": {
+            "staticPods": ["ExpoModulesCore", "React-Core", "ReactCommon"]
+          }
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#7CFF6B"
+        }
+      ],
+      [
+        "expo-font",
+        {
+          "fonts": [
+            "./node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/Ionicons.ttf"
+          ]
+        }
+      ],
+      "expo-sqlite"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "94a290ea-e370-4963-8909-094f62e2a4b0"
+      }
+    }
+  }
+}
