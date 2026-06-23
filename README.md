@@ -1,5 +1,11 @@
 # Blink
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Android-3ddc84.svg)](https://github.com/tralalananala-cloud/blink/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/tralalananala-cloud/blink)](https://github.com/tralalananala-cloud/blink/releases/latest)
+[![Encryption](https://img.shields.io/badge/crypto-libsignal%20%2B%20post--quantum-7c3aed.svg)](SECURITY.md)
+[![Website](https://img.shields.io/badge/website-blinkmessenger.vercel.app-0ea5e9.svg)](https://blinkmessenger.vercel.app)
+
 > A decentralized, end-to-end-encrypted messenger. **No phone number, no email** —
 > your identity is a key you hold. Post-quantum encryption via the official libsignal.
 
