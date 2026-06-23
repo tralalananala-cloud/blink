@@ -198,8 +198,7 @@ export const en = {
   security: {
     insecureBanner:
       "DEMO build: crypto is mocked and NOT secure. Do not send real secrets.",
-    experimentalBanner:
-      "Real Signal crypto (X3DH + Double Ratchet) — unaudited build. Not for production secrets yet.",
+    unauditedNote: "our integration isn't independently audited yet",
   },
 } as const;
 

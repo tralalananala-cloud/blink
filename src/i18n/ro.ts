@@ -200,7 +200,6 @@ export const ro: Dict = {
   security: {
     insecureBanner:
       "Build DEMO: criptarea e mockată și NU e sigură. Nu trimite secrete reale.",
-    experimentalBanner:
-      "Criptare Signal reală (X3DH + Double Ratchet) — build needuitat. Încă nu pentru secrete de producție.",
+    unauditedNote: "integrarea noastră nu e încă auditată independent",
   },
 };

@@ -19,7 +19,7 @@ export function SecurityBanner() {
 
   const real = engine.isSecure;
   const color = real ? colors.warning : colors.danger;
-  const msg = real ? t.security.experimentalBanner : t.security.insecureBanner;
+  const msg = real ? `${engine.name} — ${t.security.unauditedNote}` : t.security.insecureBanner;
 
   return (
     <View style={[styles.banner, { backgroundColor: real ? "rgba(245,185,60,0.10)" : colors.glowDanger, borderColor: color }]}>
