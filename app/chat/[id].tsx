@@ -90,6 +90,9 @@ export default function Conversation() {
   const [attach, setAttach] = useState(false);
   const [recording, setRecording] = useState(false);
   const listRef = useRef<FlatList>(null);
+  // true cât timp utilizatorul e jos de tot; doar atunci auto-derulăm la fund (la mesaj nou /
+  // deschiderea tastaturii). Altfel, dacă a derulat în sus să citească istoricul, NU-l mai smucim.
+  const atBottomRef = useRef(true);
   const recRef = useRef<VoiceRecorder | null>(null);
 
   useEffect(() => {
@@ -325,7 +328,13 @@ export default function Conversation() {
             renderItem={({ item }) => <MessageBubble msg={item} onLongPress={setMenuMsg} />}
             contentContainerStyle={styles.list}
             showsVerticalScrollIndicator={false}
-            onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
+            keyboardShouldPersistTaps="handled"
+            onScroll={(e) => {
+              const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+              atBottomRef.current = contentOffset.y + layoutMeasurement.height >= contentSize.height - 80;
+            }}
+            scrollEventThrottle={16}
+            onContentSizeChange={() => { if (atBottomRef.current) listRef.current?.scrollToEnd({ animated: false }); }}
             initialNumToRender={15}
             maxToRenderPerBatch={10}
             windowSize={11}

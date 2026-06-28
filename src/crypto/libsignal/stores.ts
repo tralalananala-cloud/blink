@@ -64,7 +64,10 @@ export class DbPreKeyStore extends PreKeyStore {
     if (!b) throw new Error("PreKey lipsă: " + id);
     return PreKeyRecord._fromSerialized(b);
   }
-  async removePreKey(id: number): Promise<void> { await dbRemoveItem(P + "pk." + id); }
+  async removePreKey(id: number): Promise<void> {
+    if (id === 1) return; // #4: prekey LAST-RESORT (id=1) e reutilizabil → NU-l ștergem (fallback când poolul e gol)
+    await dbRemoveItem(P + "pk." + id);
+  }
 }
 
 export class DbSignedPreKeyStore extends SignedPreKeyStore {

@@ -1,34 +1,40 @@
-# Blink — Security & Threat Model
+# Blink — Securitate & Threat Model
 
-> Honesty first: we state what we protect **and what we don't**. Blink uses audited
-> primitives (libsignal, @noble/Cure53), but **our integration has not been independently
-> audited**. We do not display an "AUDITED" badge.
+> Onest înainte de toate: spunem ce protejăm **și ce NU**. Blink folosește primitive
+> auditate (libsignal, @noble/Cure53), dar **integrarea noastră nu a fost auditată
+> independent**. Nu afișăm „AUDITED".
 
-## What Blink protects
+## Ce protejează Blink
+- **Conținutul mesajelor** — E2EE prin **libsignal** (X3DH + **PQXDH post-quantum / Kyber-ML-KEM** + Double Ratchet). Releul nu poate citi mesajele.
+- **Identitate fără PII** — cheie pe dispozitiv (DID:key), fără număr de telefon/email. Frază de recuperare BIP39.
+- **Anti-MITM** — safety number (SHA-256 peste ambele chei reale) + verificare QR + alertă la schimbarea cheii.
+- **Sealed sender** — releul nu vede CINE trimite (doar destinatarul, pentru rutare).
+- **La repaus (Android)** — chei în Keystore (`WHEN_UNLOCKED_THIS_DEVICE_ONLY`), mesaje în SQLite criptat (ChaCha20-Poly1305).
+- **Pe dispozitiv** — lock app (parolă **scrypt** + biometrie), parolă per-conversație, mesaje care dispar, anti-screenshot, igienă RAM la fundal.
 
-- **Message content** — E2EE via **libsignal** (X3DH + **PQXDH post-quantum / Kyber-ML-KEM** + Double Ratchet). The relay cannot read messages.
-- **Identity without PII** — an on-device key (`did:key`), no phone number or email. BIP39 recovery phrase.
-- **Anti-MITM** — safety number (SHA-256 over both real identity keys) + QR verification + key-change alert.
-- **Sealed sender** — the relay does not see WHO is sending (only the recipient, for routing).
-- **At rest (Android)** — keys in the Android Keystore (`WHEN_UNLOCKED_THIS_DEVICE_ONLY`), messages in encrypted SQLite (ChaCha20-Poly1305).
-- **On device** — app lock (password + biometrics), per-conversation passwords, disappearing messages, anti-screenshot, RAM hygiene on background.
+## Ce NU protejează (limitări asumate)
+- **Metadate de rețea** — releul (Cloudflare) vede **IP-ul, timing-ul și volumul** tău. Sealed sender ascunde DID-ul expeditorului, NU calea de rețea. Tor = pe roadmap.
+- **Impersonare pe contacte NEVERIFICATE (sealed sender)** — plicul sealed nu autentifică criptografic expeditorul la nivel **exterior** (`sd` e auto-declarat). Autenticitatea reală vine din **interior**: mesajul libsignal se decriptează DOAR sub sesiunea lui `sd`, deci un `sd` fals eșuează la decriptare. În plus, de la auditul 2026-06-24 **DID-ul = sha256(idKey ‖ authPub)** și e verificat la stabilirea sesiunii + la releu → un releu **nu mai poate substitui cheia** (MITM la primul contact e blocat criptografic, nu doar prin safety number). Reziduu: pe un contact pe care nu l-ai adăugat niciodată, tot verifici safety number-ul. [audit #2/#6]
+- **Dispozitiv compromis** — root/malware/keylogger înfrânge orice messenger. Protejăm conținutul, nu un OS ostil.
+- **Desktop (Electron) la repaus** — pe desktop secretele stau în `localStorage` (necriptat de OS) → criptarea „at rest" e slabă fără full-disk encryption. Android e calea sigură; desktopul e parcat. [audit #3]
+- **Neauditat** — primitivele sunt auditate, integrarea Blink nu. Plan: open-source + reproducible builds + bug bounty.
 
-## What Blink does NOT protect (assumed limitations)
+## Rezultatul auditului intern (2026-06-22)
+**Reparat:** badge fals „AUDITED" scos (`isAudited=false`); cod mort cu hash necriptografic șters; comparație parolă în timp constant; releu cu **rate-limit + cap coadă** anti-spam + logging redus de DID-uri.
 
-- **Network metadata** — the relay (Cloudflare) sees your **IP, timing and volume**. Sealed sender hides the sender's DID, NOT the network path. Tor/I2P is on the roadmap.
-- **Impersonation on UNVERIFIED contacts (sealed sender)** — the sealed envelope does not cryptographically authenticate the sender at the outer layer (`sd` is self-declared; the inner libsignal message is authenticated). An attacker who knows your public key + a victim DID could attempt to impersonate an **unverified** contact. **Defense: verify the safety number** (the app nudges you). [audit #2]
-- **Compromised device** — root/malware/keylogger defeats any messenger. We protect content, not a hostile OS.
-- **Desktop (Electron) at rest** — on desktop, secrets live in `localStorage` (not OS-encrypted) → "at rest" encryption is weak without full-disk encryption. Android is the safe path; desktop is parked. [audit #3]
-- **Not audited** — the primitives are audited, the Blink integration is not. Plan: open-source + reproducible builds + bug bounty.
+**Parolă app (#4) — nuanță:** scrypt pur-JS blochează firul UI pe telefon (Hermes) câteva secunde → am revenit la SHA-256 rapid. Pe Android hash-ul e protejat de Android Keystore, deci e acceptabil. Un KDF lent real (anti brute-force pe hash extras, relevant mai ales pe desktop) cere un modul nativ — **amânat**.
 
-## Internal audit results (2026-06-22)
+**Documentat / pe roadmap:** #3 plaintext desktop (desktop parcat), #8 bias minor de modulo la afișarea safety number (neglijabil), #12 AEAD fără AAD pe stocarea locală (schimbarea ar invalida datele existente).
 
-**Fixed:** removed the false "AUDITED" badge (`isAudited=false`); deleted dead code using a non-cryptographic hash; constant-time password comparison; relay with **rate-limit + queue cap** anti-spam + reduced DID logging.
+## Rezultatul auditului 2026-06-24 (focus Android/libsignal)
+Motorul vechi `SignalEngine` (pur-JS, al doilea format pe sârmă) a fost **ȘTERS** — rămâne un singur motor: **libsignal** nativ. Reparat în acest val:
+- **C1 — Auth releu (challenge-response).** Releul cerea zero dovadă de proprietate a DID-ului → oricine putea drena coada altuia, suprascrie bundle-ul, face dereg sau seta push token. Acum reg-ul **semnează un nonce** cu o cheie Ed25519 derivată din seed; releul verifică semnătura + `did === base32(sha256(idKey ‖ authPub))` cu WebCrypto. `reg/dereg/push/qack` cer autentificare; `getbundle/send` rămân deschise (sealed = anonim by design).
+- **C2 — Binding DID↔cheie.** La stabilirea sesiunii, clientul verifică `didFrom(idKey, authPub) === peerDid` → un releu compromis nu mai poate substitui cheia la primul contact.
+- **#7 — DID = hash, nu trunchiere.** `base32(sha256(idKey ‖ authPub))`, non-lossy, ~200 biți → commitment criptografic real (înlocuiește trunchierea base64 lossy).
+- **#4 — One-time prekeys reale.** Pool de prekey-uri (id-uri monotone) ținut de releu și **POPat câte unul per `getbundle`** → fiecare contact primește un opk diferit; fix și pt bug-ul „al doilea contact nu putea iniția sesiune". Prekey last-resort reutilizabil ca fallback; signed prekey rotit la 7 zile.
+- **#5/#7 — Anti-replay & banner.** Dedupe LRU pe amprenta plicului (replay/re-livrare ignorate) + bannerul „re-pair" se ridică doar pt contacte cu sesiune existentă, debounce 30s (nu mai poate fi spamat).
 
-**App password (#4) — nuance:** pure-JS scrypt blocks the UI thread on the phone (Hermes) for several seconds → we reverted to fast SHA-256. On Android the hash is protected by the Android Keystore, so this is acceptable. A real slow KDF (against brute-force on an extracted hash, relevant mainly on desktop) requires a native module — **deferred**.
+> ⚠️ Modificările pe motorul libsignal sunt type-correct + cross-verificate în Node, dar necesită **test E2E pe device** înainte de release. Format pe sârmă nou (DID + authPub + auth releu) → **toți re-pairează** (QR).
 
-**Documented / on the roadmap:** #2 sealed-sender impersonation (mitigated by the safety number), #3 desktop plaintext (desktop parked), #7 DID derived with truncation (MITM still caught by the safety number; changing it would break identities), #8 minor modulo bias in safety-number display (negligible), #12 AEAD without AAD on local storage (changing it would invalidate existing data).
-
-## Reporting vulnerabilities
-
-Open a private GitHub Security Advisory on the Blink repository. Coordinated disclosure, with no legal action against good-faith research.
+## Raportare vulnerabilități
+După publicarea sursei: GitHub Security Advisory privat pe repo-ul Blink. Disclosure coordonat, fără acțiuni legale împotriva cercetării de bună-credință.

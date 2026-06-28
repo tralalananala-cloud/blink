@@ -8,6 +8,7 @@ import { Screen } from "../../src/components/Screen";
 import { Avatar } from "../../src/components/Avatar";
 import { UnreadBadge, VerifiedBadge } from "../../src/components/Badges";
 import { SecurityBanner } from "../../src/components/SecurityBanner";
+import { UpdateBanner } from "../../src/components/UpdateBanner";
 import { clearConvPasscode } from "../../src/security/lock";
 import { radius, space } from "../../src/theme/tokens";
 import { fonts } from "../../src/theme/typography";
@@ -71,7 +72,8 @@ export default function Chats() {
 
   return (
     <Screen title={t.tabs.chats} right={<NetPill />}>
-      <View style={{ marginBottom: space.md }}>
+      <View style={{ marginBottom: space.md, gap: space.sm }}>
+        <UpdateBanner />
         <SecurityBanner />
       </View>
       <FlatList

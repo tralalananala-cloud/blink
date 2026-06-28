@@ -5,7 +5,8 @@
   "description": "Blink blind relay on Cloudflare Workers + Durable Objects (free, no card, persistent).",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "test": "node --test test/"
   },
   "devDependencies": {
     "wrangler": "^3.90.0"

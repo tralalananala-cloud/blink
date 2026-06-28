@@ -16,7 +16,7 @@ import { Attachment } from "../data/mockData";
 import { createMediaSink, MediaSink, streamFileChunks, writeMedia } from "../media/wire";
 import { callManager } from "../calls/webrtc";
 import { reticulum } from "./reticulum";
-import { toB64, fromB64, utf8, fromUtf8 } from "../crypto/signal/primitives";
+import { toB64, fromB64, utf8, fromUtf8, hash } from "../crypto/signal/primitives";
 
 type IncomingCb = (fromDid: string, plaintext: string, remoteId?: string, senderName?: string) => void;
 // M4 — sink = scriere streaming în fișier (nativ); parts = asamblare legacy în RAM (web/fallback)
@@ -28,8 +28,10 @@ function myName(): string {
 
 const isDev = typeof __DEV__ !== "undefined" ? __DEV__ : false;
 
-const ACK_TIMEOUT = 6000;    // cât așteptăm un „delivered" înainte de a retrimite mesajul
-const ACK_MAX_ATTEMPTS = 4;  // câte resend-uri încercăm înainte de a renunța (rămâne la ✓, onest)
+const ACK_TIMEOUT = 6000;     // cât așteptăm un „delivered" înainte de a retrimite mesajul
+const ACK_MAX_ATTEMPTS = 8;   // resend-uri pt mesaj (acoperă un peer offline câteva minute, nu ~70s)
+const ACK_BACKOFF_CAP = 60000; // intervalul dintre resend-uri nu crește peste 60s
+const OUTACK_MAX_ATTEMPTS = 15; // re-încercări pt confirmările proprii „livrat/citit" (sesiune nepregătită)
 
 class Relay {
   private ws: WebSocket | null = null;
@@ -41,15 +43,39 @@ class Relay {
   private mediaAsm = new Map<string, MediaAsm>(); // reasamblare media: `${fromDid}:${id}` → bucăți
   private pushToken: string | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
+  // v1.2.1 — înregistrare auto-vindecătoare: confirmare `ready` + watchdog de reconectare.
+  private registered = false;   // am primit `ready` de la releu (reg confirmat)
+  private regSent = false;      // am trimis deja reg pe ACEASTĂ conexiune (anti-dublu challenge)
+  private regWatchdog: ReturnType<typeof setTimeout> | null = null;
   // outbox: mesaje de trimis care așteaptă (re)conectarea — nu se pierd la conexiune capricioasă
   private outbox: Array<{ to: string; kind: "text" | "media"; text?: string; att?: Attachment; id: string }> = [];
   // pendingAck: mesaje PREDATE releului dar fără confirmare „delivered" — se RETRIMIT pe timeout.
   // Rezolvă socketul-zombi după re-pair/reconectare (releul zice LIVRAT-LIVE pe un socket mort →
   // mesajul nu ajunge → fără resend ar rămâne la o singură bifă până la restart manual).
   private pendingAck = new Map<string, { to: string; kind: "text" | "media"; text?: string; att?: Attachment; attempts: number; nextAt: number }>();
+  // outAck: confirmările PROPRII („livrat"/„citit") care n-au putut pleca (sesiune de răspuns
+  // nepregătită la golirea cozii în rafală) — se RE-ÎNCEARCĂ, altfel expeditorul rămâne pe o bifă.
+  private outAck = new Map<string, { to: string; id: string; kind: "delivered" | "read"; attempts: number }>();
   private ackTimer: ReturnType<typeof setInterval> | null = null;
   // A1 Reticulum: did peer → adresa lui Reticulum (învățată din payload-ul mesajelor).
   private peerReticulum = new Map<string, string>();
+  // qack: id-urile mesajelor din coada offline DECRIPTATE cu succes → se confirmă releului
+  // (livrare at-least-once). Releul scoate din coadă doar ce confirmăm; restul re-livrează.
+  private qackBuf = new Set<string>();
+  private qackTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // #5 — debounce per contact pt bannerul „re-pair" (nu-l spamăm la replay/gunoi).
+  private repairDebounce = new Map<string, number>();
+  // #7 — amprente de plicuri deja procesate (LRU) → respinge replay/re-livrare duplicată.
+  private seenEnv = new Map<string, number>();
+
+  private envFp(env: any): string {
+    return toB64(hash(utf8(env.sealed || env.ciphertext || "")));
+  }
+  private markSeen(fp: string): void {
+    this.seenEnv.set(fp, Date.now());
+    if (this.seenEnv.size > 600) { const k = this.seenEnv.keys().next().value; if (k) this.seenEnv.delete(k); }
+  }
 
   setUrl(u: string) { this.url = u; }
   isConnected() { return this.connected; }
@@ -65,6 +91,22 @@ class Relay {
     if (this.connected && did && this.pushToken) {
       try { this.ws!.send(JSON.stringify({ t: "push", did, token: this.pushToken })); } catch {}
     }
+  }
+
+  // Confirmă releului un mesaj din coada offline DUPĂ ce a fost decriptat+procesat → releul îl
+  // scoate din coadă. Debounce 150ms ca să coaleseze o rafală (ex. 19 mesaje) într-un singur qack.
+  private queueAck(qid: string) {
+    this.qackBuf.add(qid);
+    if (this.qackTimer) return;
+    this.qackTimer = setTimeout(() => {
+      this.qackTimer = null;
+      const ids = [...this.qackBuf];
+      this.qackBuf.clear();
+      const did = this.myDid();
+      if (this.connected && did && ids.length) {
+        try { this.ws?.send(JSON.stringify({ t: "qack", did, ids })); } catch {}
+      }
+    }, 150);
   }
 
   private myDid(): string | null {
@@ -90,21 +132,74 @@ class Relay {
     this.ws = ws;
     ws.onopen = () => {
       this.connected = true;
-      try { ws.send(JSON.stringify({ t: "reg", did, bundle: engine.getBundle() })); } catch {}
-      this.sendPush(); // re-trimite token-ul de push la (re)conectare
+      this.registered = false;
+      this.regSent = false;
       this.startPing(); // keepalive ca să nu pice conexiunea
-      this.startAckSweep(); // retrimite mesajele neconfirmate (anti socket-zombi)
-      this.flushOutbox(); // trimite ce s-a acumulat cât eram offline
-      // A1 Reticulum (opțional): înregistrează-te la gateway + ascultă inbox-ul (transport orb).
-      if (RETICULUM_GATEWAY) {
-        reticulum.register(did).then((addr) => {
-          if (addr) reticulum.startPolling((blob) => { try { this.handle(fromUtf8(fromB64(blob))); } catch {} });
-        });
-      }
+      // Auth releu (C1): CEREM activ challenge-ul (anti-race — nu ne bazăm pe push-ul de la releu,
+      // care poate ajunge înainte să ascultăm). Releul răspunde cu {t:"challenge", nonce} → doRegister.
+      try { ws.send(JSON.stringify({ t: "hello" })); } catch {}
+      // Watchdog: dacă reg-ul nu se confirmă (`ready`) în 5s, reconectăm (challenge nou) —
+      // așa NU mai e nevoie de restart manual după update (vezi bug v1.2.0).
+      this.armRegWatchdog();
     };
-    ws.onclose = () => { this.connected = false; this.stopPing(); this.stopAckSweep(); this.scheduleRetry(); };
+    ws.onclose = () => {
+      this.connected = false; this.registered = false; this.regSent = false;
+      this.stopPing(); this.stopAckSweep(); this.clearRegWatchdog(); this.scheduleRetry();
+    };
     ws.onerror = () => {};
     ws.onmessage = (ev: any) => this.handle(ev.data);
+  }
+
+  /**
+   * Auth releu (C1): la primirea challenge-ului, trimite reg-ul SEMNAT cu cheia de identitate
+   * (engine.signChallenge). Releul verifică semnătura + că did === didFrom(idKey, authPub)
+   * înainte de a accepta reg/dereg/push/qack → nimeni nu mai poate revendica DID-ul altcuiva.
+   * Restul inițializării (push, sweep, outbox, Reticulum) pornește abia după ce reg-ul a plecat.
+   */
+  private doRegister(nonce: string) {
+    if (this.regSent || !this.connected) return; // o singură dată per conexiune (push + hello pot dubla challenge-ul)
+    const did = this.myDid();
+    if (!did) return;
+    // Construiește reg-ul DEFENSIV: dacă motorul nu-i încă gata (getBundle/signChallenge aruncă),
+    // NU consuma tăcut challenge-ul — reconectează ca să vină unul nou când suntem gata.
+    let bundle: any, auth: any, opks: any;
+    try {
+      bundle = engine.getBundle();
+      auth = engine.signChallenge?.(nonce);
+      opks = engine.getOpkBatch?.(); // #4 batch de one-time prekey-uri pt pool-ul releului
+    } catch {
+      try { this.ws?.close(); } catch {} // → onclose → scheduleRetry (challenge nou)
+      return;
+    }
+    this.regSent = true;
+    try { this.ws?.send(JSON.stringify({ t: "reg", did, bundle, ackq: true, auth, opks })); }
+    catch { this.regSent = false; try { this.ws?.close(); } catch {}; }
+    // Restul inițializării (push, sweep, outbox, Reticulum) se face la CONFIRMAREA `ready`.
+  }
+
+  /** Releul a confirmat înregistrarea (`ready`) → oprește watchdog-ul și pornește restul. */
+  private onRegistered() {
+    this.registered = true;
+    this.clearRegWatchdog();
+    const did = this.myDid();
+    this.sendPush();
+    this.startAckSweep();
+    this.flushOutbox();
+    if (RETICULUM_GATEWAY && did) {
+      reticulum.register(did).then((addr) => {
+        if (addr) reticulum.startPolling((blob) => { try { this.handle(fromUtf8(fromB64(blob))); } catch {} });
+      });
+    }
+  }
+
+  private armRegWatchdog() {
+    this.clearRegWatchdog();
+    this.regWatchdog = setTimeout(() => {
+      if (!this.registered) { try { this.ws?.close(); } catch {} } // reg neconfirmat → reconectează
+    }, 5000);
+  }
+  private clearRegWatchdog() {
+    if (this.regWatchdog) { clearTimeout(this.regWatchdog); this.regWatchdog = null; }
   }
 
   private startPing() {
@@ -132,17 +227,24 @@ class Relay {
   private stopAckSweep() {
     if (this.ackTimer) { clearInterval(this.ackTimer); this.ackTimer = null; }
   }
-  // Retrimite mesajele neconfirmate ajunse la timeout (același msgId → receptorul face dedupe).
+  // Retrimite mesajele neconfirmate ajunse la timeout (același msgId → receptorul face dedupe)
+  // ȘI re-încearcă confirmările proprii care n-au putut pleca (sesiune nepregătită la flush).
   private ackSweep() {
-    if (!this.connected || this.pendingAck.size === 0) return;
+    if (!this.connected) return;
     const now = Date.now();
     for (const [id, p] of this.pendingAck) {
       if (now < p.nextAt) continue;
       if (p.attempts >= ACK_MAX_ATTEMPTS) { this.pendingAck.delete(id); continue; } // renunță (rămâne ✓)
       p.attempts++;
-      p.nextAt = now + ACK_TIMEOUT * Math.pow(1.8, p.attempts); // backoff
+      p.nextAt = now + Math.min(ACK_TIMEOUT * Math.pow(1.8, p.attempts), ACK_BACKOFF_CAP); // backoff plafonat
       if (p.kind === "text") void this.sendText(p.to, p.text!, id);
       else if (p.att) void this.sendMedia(p.to, p.att, id);
+    }
+    // re-trimite confirmările de livrare/citire blocate (sesiunea spre expeditor s-a încălzit între timp)
+    for (const [key, a] of this.outAck) {
+      a.attempts++;
+      if (a.attempts > OUTACK_MAX_ATTEMPTS) { this.outAck.delete(key); continue; }
+      void this.trySendAck(a.to, a.id, a.kind).then((ok) => { if (ok) this.outAck.delete(key); });
     }
   }
 
@@ -176,6 +278,9 @@ class Relay {
     this.connected = false;
     this.outbox = [];
     this.pendingAck.clear();
+    this.outAck.clear();
+    if (this.qackTimer) { clearTimeout(this.qackTimer); this.qackTimer = null; }
+    this.qackBuf.clear();
     this.peerReticulum.clear();
     reticulum.stopPolling();
     this.mediaAsm.clear();
@@ -186,13 +291,26 @@ class Relay {
   private async handle(raw: any) {
     let m: any;
     try { m = JSON.parse(typeof raw === "string" ? raw : raw.toString()); } catch { return; }
+    if (m.t === "challenge" && m.nonce) { this.doRegister(m.nonce); return; } // auth releu (C1)
+    if (m.t === "ready") { this.onRegistered(); return; } // reg confirmat → pornește restul (msg-urile din coadă vin separat)
+    if (m.t === "denied") { if (isDev) console.warn("[Blink] releu a refuzat reg:", m.reason); this.regSent = false; return; }
     if (m.t === "bundle") {
       const w = this.waiters.get(m.did);
-      if (w) { this.waiters.delete(m.did); w(m.bundle ?? null); }
+      if (w) {
+        this.waiters.delete(m.did);
+        const b = m.bundle ?? null;
+        if (b && m.opk) b.opk = m.opk; // #4 one-time prekey POPat de releu pt acest contact
+        w(b);
+      }
       return;
     }
     if (m.t === "msg" && m.env) {
       const env = m.env as CipherEnvelope & { sealed?: string };
+      const qid: string | undefined = m.qid; // prezent doar pt mesaje din coada offline (livrare confirmată)
+      // #7 dedupe: plic deja procesat (replay sau re-livrare din coadă) → confirmă-l și ieși,
+      // fără să-l reprocesăm sau să declanșăm bannere. (amprenta nu se reține decât pe succes.)
+      const fp = this.envFp(env);
+      if (this.seenEnv.has(fp)) { if (qid) this.queueAck(qid); return; }
       try {
         let plaintext: string;
         if (env.sealed && engine.decryptSealed) {
@@ -204,7 +322,12 @@ class Relay {
         } else {
           plaintext = (await engine.decrypt(env)).plaintext;
         }
+        this.markSeen(fp); // #7 decriptat cu succes → reține amprenta (anti-replay)
         useApp.getState().clearNeedsRepair(env.fromDid); // decriptare reușită → relație sănătoasă
+        // Commit livrare: decriptarea a reușit = ratchet-ul a avansat ireversibil, deci re-livrarea
+        // aceluiași mesaj n-ar mai putea fi decriptată → confirmă releului să-l scoată din coadă.
+        // Eșecul de decriptare (catch) NU confirmă → mesajul rămâne în coadă pt re-încercare.
+        if (qid) this.queueAck(qid);
         let parsed: any = null;
         try { parsed = JSON.parse(plaintext); } catch {}
         if (parsed && parsed.k === "a" && parsed.id) {
@@ -269,9 +392,18 @@ class Relay {
         this.incoming?.(env.fromDid, body, remoteId, senderName);
         if (remoteId) this.sendAck(env.fromDid, remoteId, "delivered"); // ✓✓ livrat, automat
       } catch {
-        // B2 — decriptare eșuată de la un contact cunoscut = probabil și-a resetat
-        // identitatea (chei noi, sesiune ratchet incompatibilă). Marchează → banner re-pair.
-        useApp.getState().flagNeedsRepair(env.fromDid);
+        // #5 — marchează „re-pair" DOAR pt un contact cu care AVEM o sesiune (desincronizare
+        // reală de ratchet), nu pentru plicuri gunoi/replay/spoof de la necunoscuți (altfel
+        // oricine ne-ar putea spama bannerul trimițând plicuri invalide). Debounce 30s/contact.
+        // env.fromDid e setat doar pt plicuri ne-sealed; la sealed eșuat nu știm expeditorul → ignorăm.
+        const from = env.fromDid;
+        if (from && engine.hasSession(from)) {
+          const now = Date.now();
+          if (now - (this.repairDebounce.get(from) || 0) > 30000) {
+            this.repairDebounce.set(from, now);
+            useApp.getState().flagNeedsRepair(from);
+          }
+        }
       }
     }
   }
@@ -370,10 +502,23 @@ class Relay {
 
   /** Trimite o confirmare (livrat/citit) criptată E2E. */
   async sendAck(peerDid: string, id: string, kind: "delivered" | "read"): Promise<void> {
-    if (!this.connected) return;
-    if (!(await this.ensureSession(peerDid))) return;
-    const env = await this.encryptFor(peerDid, JSON.stringify({ k: "a", id, s: kind }));
-    try { await this.transmit(peerDid, env); } catch {}
+    const ok = await this.trySendAck(peerDid, id, kind);
+    if (!ok) {
+      // n-a putut pleca acum (offline / sesiune de răspuns nepregătită la flush) → re-încearcă în sweep
+      this.outAck.set(`${peerDid}|${id}|${kind}`, { to: peerDid, id, kind, attempts: 0 });
+      this.startAckSweep();
+    }
+  }
+
+  // O singură încercare de a trimite o confirmare; întoarce true doar dacă a plecat efectiv.
+  private async trySendAck(peerDid: string, id: string, kind: "delivered" | "read"): Promise<boolean> {
+    if (!this.connected) return false;
+    if (!(await this.ensureSession(peerDid))) return false;
+    try {
+      const env = await this.encryptFor(peerDid, JSON.stringify({ k: "a", id, s: kind }));
+      await this.transmit(peerDid, env);
+      return true;
+    } catch { return false; }
   }
 
   /** La deschiderea conversației: confirmă „citit" pt mesajele primite ne-confirmate. */

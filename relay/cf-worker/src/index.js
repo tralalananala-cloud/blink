@@ -22,6 +22,8 @@
  * => conexiunile se imprastie pe mii de obiecte, capacitatea simultana creste mult.
  */
 
+import { verifyReg } from "./auth.mjs"; // AUTH RELEU (C1) — helperi puri, testați (test/auth.test.mjs)
+
 const TTL = 30 * 24 * 3600 * 1000; // 30 zile
 const shardName = (did) => "shard:" + did;
 // #5 anti-abuz: plafon coadă (stochare) + rate-limit/dest (anti-flood). Generos, ca să
@@ -82,7 +84,7 @@ export class Relay {
     if (!live) {
       const q = (await this.storage.get("queue:" + to)) || [];
       while (q.length >= MAX_QUEUE) q.shift(); // #5 nu lăsa coada să crească nelimitat (spam la offline)
-      q.push({ env, ts: Date.now() });
+      q.push({ id: crypto.randomUUID(), env, ts: Date.now() }); // id stabil pt confirmare per-mesaj (qack)
       await this.storage.put("queue:" + to, q);
       await this.pushNotify(to);
     }
@@ -109,15 +111,26 @@ export class Relay {
     } catch { return false; }
   }
 
-  // Bundle-ul lui `did` traieste pe shardul lui: citeste local sau cere cross-shard.
+  // #4 — POPează un one-time prekey din poolul lui `did` (consumat: fiecare contact ia altul).
+  async popOpkLocal(did) {
+    const list = (await this.storage.get("opks:" + did)) || [];
+    if (!list.length) return null;
+    const opk = list.shift();
+    await this.storage.put("opks:" + did, list);
+    return opk;
+  }
+
+  // Bundle-ul lui `did` traieste pe shardul lui: citeste local (+ POP opk) sau cere cross-shard.
   async bundleRouted(did) {
-    if (this.ownsLocally(did)) return (await this.storage.get("bundle:" + did)) || null;
+    if (this.ownsLocally(did)) {
+      return { bundle: (await this.storage.get("bundle:" + did)) || null, opk: await this.popOpkLocal(did) };
+    }
     const stub = this.env.RELAY.get(this.env.RELAY.idFromName(shardName(did)));
     try {
       const res = await stub.fetch("https://relay/bundle?did=" + encodeURIComponent(did));
       const j = await res.json();
-      return j.bundle || null;
-    } catch { return null; }
+      return { bundle: j.bundle || null, opk: j.opk || null };
+    } catch { return { bundle: null, opk: null }; }
   }
 
   async fetch(req) {
@@ -132,7 +145,8 @@ export class Relay {
     if (url.pathname === "/bundle") {
       const did = url.searchParams.get("did");
       const b = did ? ((await this.storage.get("bundle:" + did)) || null) : null;
-      return new Response(JSON.stringify({ bundle: b }), { headers: { "content-type": "application/json" } });
+      const opk = did ? await this.popOpkLocal(did) : null; // #4 POP cross-shard
+      return new Response(JSON.stringify({ bundle: b, opk }), { headers: { "content-type": "application/json" } });
     }
     // SEALED SENDER (#2): trimitere ANONIMĂ prin HTTP — releul NU află expeditorul
     // (niciun reg, niciun socket asociat; doar `to` pt rutare + blob opac). Decuplează
@@ -148,6 +162,11 @@ export class Relay {
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
       this.state.acceptWebSocket(server); // hibernatable
+      // AUTH (C1): emite un nonce de challenge; reg-ul trebuie să-l semneze. Nonce-ul stă
+      // pe atașamentul socketului (supraviețuiește hibernării) până la reg.
+      const nonce = crypto.randomUUID();
+      server.serializeAttachment({ nonce });
+      try { server.send(JSON.stringify({ t: "challenge", nonce })); } catch {}
       return new Response(null, { status: 101, webSocket: client });
     }
     return new Response("blink-relay\n");
@@ -161,31 +180,79 @@ export class Relay {
       return;
     }
 
+    // v1.2.1 — challenge inițiat de client (anti-race): clientul cere challenge-ul când e gata
+    // să-l asculte; re-trimitem nonce-ul deja stocat pe socket (NU regenerăm → fără mismatch
+    // cu un push anterior). Push-ul de la conectare rămâne pt clienții 1.2.0.
+    if (m.t === "hello") {
+      const a = ws.deserializeAttachment();
+      if (a && a.nonce) ws.send(JSON.stringify({ t: "challenge", nonce: a.nonce }));
+      return;
+    }
+
     if (m.t === "reg" && m.did) {
-      ws.serializeAttachment({ did: m.did }); // supravietuieste hibernarii
+      // AUTH (C1): reg-ul TREBUIE să dovedească proprietatea DID-ului (semnătură peste nonce).
+      const att0 = ws.deserializeAttachment() || {};
+      const ok = await verifyReg(m.did, m.bundle && m.bundle.ls, m.auth, att0.nonce);
+      if (!ok) { try { ws.send(JSON.stringify({ t: "denied", reason: "auth" })); ws.close(1008, "auth"); } catch {} return; }
+      ws.serializeAttachment({ did: m.did, authed: true }); // socket autentificat (nonce consumat)
       this.closeStale(m.did, ws); // reconectare: scapa de socketul vechi (anti false LIVRAT-LIVE)
       if (m.bundle) await this.storage.put("bundle:" + m.did, m.bundle);
+      if (Array.isArray(m.opks)) {
+        // #4 pool de one-time prekey-uri: ÎNLOCUIEȘTE cu batch-ul curent (clientul îl are sigur
+        // în store). Append-ul (≤1.2.0) lăsa releul să POPeze opk-uri pe care clientul le tăiase
+        // → prekey message cu un opk inexistent → handshake eșuat la contacte noi. (v1.2.1)
+        await this.storage.put("opks:" + m.did, m.opks.slice(0, 200));
+      }
       const q = (await this.storage.get("queue:" + m.did)) || [];
       const now = Date.now();
-      const fresh = q.filter((x) => now - x.ts < TTL);
-      await this.storage.delete("queue:" + m.did);
-      ws.send(JSON.stringify({ t: "ready", queued: fresh.length }));
-      for (const x of fresh) ws.send(JSON.stringify({ t: "msg", env: x.env }));
+      // backfill id pt intrările vechi (dinainte de qack) ca să fie confirmabile
+      const fresh = q.filter((x) => now - x.ts < TTL).map((x) => (x.id ? x : { ...x, id: crypto.randomUUID() }));
+      if (m.ackq) {
+        // LIVRARE AT-LEAST-ONCE: NU șterge coada la reg — păstreaz-o până vine `qack`-ul
+        // (confirmare per mesaj, după decriptare reușită pe client). Ce nu se confirmă se
+        // re-livrează la următoarea reconectare. Curăță doar intrările expirate (TTL).
+        if (fresh.length) await this.storage.put("queue:" + m.did, fresh);
+        else await this.storage.delete("queue:" + m.did);
+        ws.send(JSON.stringify({ t: "ready", queued: fresh.length }));
+        for (const x of fresh) ws.send(JSON.stringify({ t: "msg", env: x.env, qid: x.id }));
+      } else {
+        // client vechi (fără capabilitate ack) → comportament legacy delete-on-reg
+        await this.storage.delete("queue:" + m.did);
+        ws.send(JSON.stringify({ t: "ready", queued: fresh.length }));
+        for (const x of fresh) ws.send(JSON.stringify({ t: "msg", env: x.env }));
+      }
+      return;
+    }
+
+    if (m.t === "qack" && m.did && Array.isArray(m.ids) && m.ids.length) {
+      const aq = ws.deserializeAttachment() || {};
+      if (!aq.authed || aq.did !== m.did) return; // doar proprietarul autentificat (C1)
+      // confirmare de livrare durabilă: scoate din coadă DOAR mesajele decriptate+salvate
+      // de client. Restul rămân pt re-livrare. (idempotent: id necunoscut = ignorat)
+      const q = (await this.storage.get("queue:" + m.did)) || [];
+      const ack = new Set(m.ids);
+      const left = q.filter((x) => !ack.has(x.id));
+      if (left.length) await this.storage.put("queue:" + m.did, left);
+      else await this.storage.delete("queue:" + m.did);
       return;
     }
 
     if (m.t === "getbundle" && m.did) {
-      const b = await this.bundleRouted(m.did); // cross-shard: bundle-ul e pe shardul lui m.did
-      ws.send(JSON.stringify({ t: "bundle", did: m.did, bundle: b }));
+      const r = await this.bundleRouted(m.did); // cross-shard: bundle-ul e pe shardul lui m.did
+      ws.send(JSON.stringify({ t: "bundle", did: m.did, bundle: r.bundle, opk: r.opk })); // #4 opk POPat
       return;
     }
 
     if (m.t === "push" && m.did && m.token) {
+      const ap = ws.deserializeAttachment() || {};
+      if (!ap.authed || ap.did !== m.did) return; // C1: nu lăsa pe altcineva să-ți seteze push token
       await this.storage.put("push:" + m.did, m.token); // token FCM pt notificări cu app închis
       return;
     }
 
     if (m.t === "dereg" && m.did) {
+      const ad = ws.deserializeAttachment() || {};
+      if (!ad.authed || ad.did !== m.did) return; // C1: doar proprietarul își poate șterge identitatea
       // B2 — wipe identity: șterge tot ce ține releul de acest DID (bundle + coadă + push)
       await this.storage.delete("bundle:" + m.did);
       await this.storage.delete("queue:" + m.did);

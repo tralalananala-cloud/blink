@@ -40,6 +40,8 @@ export function genSign(): KeyPair {
 }
 export const sign = (priv: Bytes, msg: Bytes): Bytes => ed25519.sign(msg, priv);
 export const verify = (sig: Bytes, msg: Bytes, pub: Bytes): boolean => ed25519.verify(sig, msg, pub);
+/** Cheia publică Ed25519 dintr-un priv de 32B (derivat determinist din seed). */
+export const edPubFromPriv = (priv: Bytes): Bytes => ed25519.getPublicKey(priv);
 
 // --- KDF-uri ---
 export function hkdfBytes(ikm: Bytes, salt: Bytes, info: string, len: number): Bytes {

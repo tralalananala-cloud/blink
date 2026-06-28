@@ -42,6 +42,8 @@ export interface SerializedBundle {
   opkPub?: string;
   /** libsignal: bundle complet (JSON base64) — câmp opac purtat prin releu. */
   ls?: string;
+  /** #4: one-time prekey POPat de releu pt acest fetch (unic per contact). */
+  opk?: { id: number; pub: string };
 }
 
 /** Rezultatul criptarii: payload opac transportat de retea. */
@@ -142,4 +144,11 @@ export interface CryptoEngine {
 
   /** Re-pairing: scoate sesiunea cu un peer → următorul mesaj re-stabilește X3DH. */
   resetSession?(peerDid: string): void;
+
+  /** Auth releu (C1): semnează un nonce de la releu cu cheia de identitate derivată din seed.
+   *  Întoarce cheia publică + semnătura (base64). Releul verifică proprietatea DID-ului. */
+  signChallenge?(nonce: string): { pub: string; sig: string };
+
+  /** #4: batch de one-time prekey-uri (publice) de urcat la reg; releul le POPează per getbundle. */
+  getOpkBatch?(): { id: number; pub: string }[];
 }

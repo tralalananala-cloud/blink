@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { router } from "expo-router";
+import * as Linking from "expo-linking";
 import { confirmDestructive } from "../../src/ui/confirm";
+import { currentVersion } from "../../src/update/checker";
 import { LinearGradient } from "expo-linear-gradient";
 import * as ScreenCapture from "expo-screen-capture";
 import { PasscodeModal } from "../../src/components/PasscodeModal";
@@ -192,6 +194,16 @@ export default function Settings() {
           <Text style={[styles.section, { color: colors.danger }]}>{t.settings.danger}</Text>
           <GlowButton label={t.settings.wipe} variant="danger" onPress={confirmWipe} />
         </Card>
+
+        {/* Version footer — tap deschide pagina de releases */}
+        <Pressable
+          onPress={() => Linking.openURL("https://github.com/tralalananala-cloud/blink/releases").catch(() => {})}
+          style={{ alignItems: "center", paddingVertical: space.lg }}
+        >
+          <Text style={{ fontFamily: fonts.monoMedium, fontSize: 12, color: colors.textMuted }}>
+            Blink v{currentVersion()}
+          </Text>
+        </Pressable>
       </ScrollView>
 
       <PasscodeModal
