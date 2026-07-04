@@ -14,8 +14,9 @@ import { useI18n } from "../../src/i18n";
 import { engine } from "../../src/crypto";
 import { Identity } from "../../src/crypto/types";
 import { useApp } from "../../src/state/store";
+import { openBatteryOptimizationSettings, supportsBackgroundHint } from "../../src/permissions/backgroundDelivery";
 
-type Step = "welcome" | "identity" | "recovery" | "biometric" | "restore";
+type Step = "welcome" | "identity" | "recovery" | "biometric" | "battery" | "restore";
 
 export default function Onboarding() {
   const { t } = useI18n();
@@ -75,7 +76,14 @@ export default function Onboarding() {
     } catch {
       /* demo: ignoram esecul biometric */
     }
-    finish();
+    afterBiometric();
+  }
+
+  // T5 — pe Android OEM (ColorOS) livrarea în fundal cere whitelist de baterie/autostart.
+  // Îl ghidăm o dată; pe iOS/web pasul nu are sens → încheiem direct.
+  function afterBiometric() {
+    if (supportsBackgroundHint) setStep("battery");
+    else finish();
   }
 
   function finish() {
@@ -200,7 +208,26 @@ export default function Onboarding() {
             </Text>
             <View style={[styles.actions, { width: "100%" }]}>
               <GlowButton label={t.onboarding.bioEnable} onPress={enableBiometric} />
-              <GlowButton label={t.onboarding.bioSkip} variant="ghost" onPress={finish} />
+              <GlowButton label={t.onboarding.bioSkip} variant="ghost" onPress={afterBiometric} />
+            </View>
+          </View>
+        )}
+
+        {step === "battery" && (
+          <View style={styles.center}>
+            <View style={styles.bioMark}>
+              <Text style={styles.bioGlyph}>🔔</Text>
+            </View>
+            <Text style={[type.h2, { marginTop: space.lg }]}>{t.onboarding.batteryTitle}</Text>
+            <Text style={[type.bodyMuted, styles.tagline, { marginTop: space.sm }]}>
+              {t.onboarding.batteryBody}
+            </Text>
+            <Card style={{ marginTop: space.md, borderColor: colors.warning, width: "100%" }}>
+              <Text style={[type.caption, { color: colors.warning }]}>{t.onboarding.batteryNote}</Text>
+            </Card>
+            <View style={[styles.actions, { width: "100%" }]}>
+              <GlowButton label={t.onboarding.batteryOpen} onPress={() => { void openBatteryOptimizationSettings(); }} />
+              <GlowButton label={t.onboarding.batterySkip} variant="ghost" onPress={finish} />
             </View>
           </View>
         )}

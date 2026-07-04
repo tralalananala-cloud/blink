@@ -23,12 +23,12 @@
  */
 
 import { verifyReg } from "./auth.mjs"; // AUTH RELEU (C1) — helperi puri, testați (test/auth.test.mjs)
+import { enqueue, pruneFresh, removeAcked, MAX_QUEUE, TTL } from "./queue.mjs"; // COADĂ at-least-once — pur, testat (test/queue.test.mjs)
+import { buildServiceJwt, buildPushMessage, shouldPush } from "./push.mjs"; // PUSH FCM — helperi puri, testați (test/push.test.mjs, test/push_collapse.test.mjs)
 
-const TTL = 30 * 24 * 3600 * 1000; // 30 zile
 const shardName = (did) => "shard:" + did;
-// #5 anti-abuz: plafon coadă (stochare) + rate-limit/dest (anti-flood). Generos, ca să
-// nu afecteze conversațiile normale; oprește doar inundațiile de spam.
-const MAX_QUEUE = 1000;
+// #5 anti-abuz: rate-limit/dest (anti-flood). Generos, ca să nu afecteze conversațiile
+// normale; oprește doar inundațiile de spam. (Plafonul cozii MAX_QUEUE e în queue.mjs.)
 const RL_MAX = 240;        // mesaje
 const RL_WINDOW = 60_000;  // pe minut, per destinatar
 
@@ -83,9 +83,9 @@ export class Relay {
     }
     if (!live) {
       const q = (await this.storage.get("queue:" + to)) || [];
-      while (q.length >= MAX_QUEUE) q.shift(); // #5 nu lăsa coada să crească nelimitat (spam la offline)
-      q.push({ id: crypto.randomUUID(), env, ts: Date.now() }); // id stabil pt confirmare per-mesaj (qack)
-      await this.storage.put("queue:" + to, q);
+      // #5 plafonat la MAX_QUEUE (cele mai vechi cad); id stabil pt confirmare per-mesaj (qack)
+      const q2 = enqueue(q, { id: crypto.randomUUID(), env, ts: Date.now() });
+      await this.storage.put("queue:" + to, q2);
       await this.pushNotify(to);
     }
     return live;
@@ -196,6 +196,7 @@ export class Relay {
       if (!ok) { try { ws.send(JSON.stringify({ t: "denied", reason: "auth" })); ws.close(1008, "auth"); } catch {} return; }
       ws.serializeAttachment({ did: m.did, authed: true }); // socket autentificat (nonce consumat)
       this.closeStale(m.did, ws); // reconectare: scapa de socketul vechi (anti false LIVRAT-LIVE)
+      await this.storage.delete("pushed:" + m.did); // T4 — a revenit online → resetează notify-once (poate re-notifica la următoarea perioadă offline)
       if (m.bundle) await this.storage.put("bundle:" + m.did, m.bundle);
       if (Array.isArray(m.opks)) {
         // #4 pool de one-time prekey-uri: ÎNLOCUIEȘTE cu batch-ul curent (clientul îl are sigur
@@ -204,9 +205,8 @@ export class Relay {
         await this.storage.put("opks:" + m.did, m.opks.slice(0, 200));
       }
       const q = (await this.storage.get("queue:" + m.did)) || [];
-      const now = Date.now();
-      // backfill id pt intrările vechi (dinainte de qack) ca să fie confirmabile
-      const fresh = q.filter((x) => now - x.ts < TTL).map((x) => (x.id ? x : { ...x, id: crypto.randomUUID() }));
+      // păstrează coada ne-expirată (TTL) + backfill id; NU o șterge la reg (at-least-once)
+      const fresh = pruneFresh(q, Date.now());
       if (m.ackq) {
         // LIVRARE AT-LEAST-ONCE: NU șterge coada la reg — păstreaz-o până vine `qack`-ul
         // (confirmare per mesaj, după decriptare reușită pe client). Ce nu se confirmă se
@@ -230,8 +230,7 @@ export class Relay {
       // confirmare de livrare durabilă: scoate din coadă DOAR mesajele decriptate+salvate
       // de client. Restul rămân pt re-livrare. (idempotent: id necunoscut = ignorat)
       const q = (await this.storage.get("queue:" + m.did)) || [];
-      const ack = new Set(m.ids);
-      const left = q.filter((x) => !ack.has(x.id));
+      const left = removeAcked(q, m.ids); // scoate doar id-urile confirmate; restul rămân
       if (left.length) await this.storage.put("queue:" + m.did, left);
       else await this.storage.delete("queue:" + m.did);
       return;
@@ -274,20 +273,7 @@ export class Relay {
     if (!env || !env.FCM_CLIENT_EMAIL || !env.FCM_PRIVATE_KEY) return null;
     const now = Math.floor(Date.now() / 1000);
     if (this.fcmAt && this.fcmAtExp > now + 60) return this.fcmAt;
-    const header = b64urlStr(JSON.stringify({ alg: "RS256", typ: "JWT" }));
-    const claim = b64urlStr(JSON.stringify({
-      iss: env.FCM_CLIENT_EMAIL,
-      scope: "https://www.googleapis.com/auth/firebase.messaging",
-      aud: "https://oauth2.googleapis.com/token",
-      iat: now, exp: now + 3600,
-    }));
-    const unsigned = header + "." + claim;
-    const key = await crypto.subtle.importKey(
-      "pkcs8", pemToArrayBuffer(env.FCM_PRIVATE_KEY),
-      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"],
-    );
-    const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(unsigned));
-    const jwt = unsigned + "." + b64url(sig);
+    const jwt = await buildServiceJwt(env.FCM_CLIENT_EMAIL, env.FCM_PRIVATE_KEY, now); // pur, testat
     const res = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -301,21 +287,21 @@ export class Relay {
   }
 
   async pushNotify(toDid) {
+    // T4 — pushNotify se cheamă pt FIECARE plic offline (o poză = ~125 bucăți + resend-uri).
+    // NOTIFY-ONCE-PÂNĂ-ONLINE: notificăm o SINGURĂ dată, apoi tăcem până revine destinatarul.
+    // Flag PERSISTENT `pushed:<DID>` (nu Map in-memory — DO-ul hibernează la WebSocket Hibernation
+    // și ștergea harta → sunetul se re-alerta la fiecare plic din furtună). Se șterge la `reg`.
+    if (!shouldPush(await this.storage.get("pushed:" + toDid))) return;
     try {
       const token = await this.storage.get("push:" + toDid);
       if (!token) return;
+      await this.storage.put("pushed:" + toDid, 1); // marchează ÎNAINTE de fetch (anti-duplicat concurent)
       const at = await this.getAccessToken();
       if (!at) return;
       await fetch(`https://fcm.googleapis.com/v1/projects/${this.env.FCM_PROJECT_ID}/messages:send`, {
         method: "POST",
         headers: { authorization: "Bearer " + at, "content-type": "application/json" },
-        body: JSON.stringify({
-          message: {
-            token,
-            notification: { title: "Blink", body: "Mesaj nou criptat" }, // generic — releul nu vede conținutul
-            android: { priority: "high" },
-          },
-        }),
+        body: JSON.stringify({ message: buildPushMessage(token, toDid) }),
       });
     } catch {
       /* push eșuat — mesajul rămâne în coadă, se livrează la reconectare */
@@ -327,28 +313,6 @@ export class Relay {
   }
 
   async webSocketError() {}
-}
-
-// --- utilitare push (Web Crypto) ---
-function pemToArrayBuffer(pem) {
-  const clean = pem
-    .replace(/\\n/g, "\n")
-    .replace(/-----BEGIN PRIVATE KEY-----/, "")
-    .replace(/-----END PRIVATE KEY-----/, "")
-    .replace(/\s+/g, "");
-  const bin = atob(clean);
-  const buf = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-  return buf.buffer;
-}
-function b64url(buf) {
-  const bytes = new Uint8Array(buf);
-  let bin = "";
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-function b64urlStr(s) {
-  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 // Ruteaza fiecare request pe shardul potrivit (vezi nota SHARDING de sus).

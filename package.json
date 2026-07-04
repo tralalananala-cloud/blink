@@ -1,6 +1,6 @@
 {
   "name": "cipher",
-  "version": "0.1.0",
+  "version": "1.2.2",
   "private": true,
   "description": "Cipher — messenger E2EE descentralizat (Android, Expo). Faza UI + arhitectura; crypto/transport mockate in spatele interfetelor reale.",
   "main": "expo-router/entry",
@@ -13,6 +13,7 @@
     "web": "expo start --web",
     "test": "jest",
     "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
     "typecheck": "tsc --noEmit",
     "fix-deps": "expo install --fix",
     "ios": "expo run:ios"
@@ -40,7 +41,9 @@
     "expo-font": "~13.0.0",
     "expo-haptics": "~14.0.0",
     "expo-image": "~2.0.7",
+    "expo-image-manipulator": "~13.0.6",
     "expo-image-picker": "~16.0.6",
+    "expo-intent-launcher": "~12.0.2",
     "expo-linear-gradient": "~14.0.0",
     "expo-linking": "~7.0.0",
     "expo-local-authentication": "~15.0.0",
@@ -77,6 +80,13 @@
   },
   "jest": {
     "preset": "jest-expo",
+    "collectCoverageFrom": [
+      "src/crypto/**/*.{ts,tsx}",
+      "src/messaging/**/*.{ts,tsx}",
+      "src/storage/**/*.{ts,tsx}",
+      "src/security/**/*.{ts,tsx}",
+      "!src/**/*.d.ts"
+    ],
     "transformIgnorePatterns": [
       "node_modules/(?!((jest-)?react-native|@react-native(-community)?|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules|sentry-expo|native-base|react-native-svg|zustand|@noble/.*|@scure/.*))"
     ]

@@ -54,6 +54,13 @@ export const ro: Dict = {
       "Cheile tale stau în keystore-ul dispozitivului. Deblochează cu amprenta sau fața.",
     bioEnable: "Activează deblocarea biometrică",
     bioSkip: "Mai târziu",
+    batteryTitle: "Notificări cu app-ul închis",
+    batteryBody:
+      "Telefoanele OPPO/ColorOS (și Xiaomi, Huawei) opresc aplicațiile în fundal și taie notificările. Ca să primești mesaje cu Blink închis, pune-l pe „Autostart” și „Fără restricții de baterie”.",
+    batteryNote:
+      "E o limită a producătorului, nu a Blink — la fel fac Signal și WhatsApp. O faci o singură dată.",
+    batteryOpen: "Deschide setările de baterie",
+    batterySkip: "Mai târziu",
   },
   tabs: {
     chats: "Conversații",
@@ -196,6 +203,11 @@ export const ro: Dict = {
     disappearingBody: "Șterge mesajele după ce le citești.",
     off: "Oprit",
     burnNote: "Mesajele citite dispar după timer.",
+    deleteBoth: "Șterge conversația la ambii",
+    deleteBothBody: "Golește conversația și la tine, și la celălalt.",
+    deleteBothConfirm: "Șterge la ambii",
+    deleteBothWarn:
+      "Cooperativ, nu garantat — un contact cu backup, screenshot sau client modificat poate păstra mesajele.",
   },
   security: {
     insecureBanner:

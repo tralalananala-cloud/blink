@@ -25,7 +25,8 @@ import {
 } from "./types";
 import { KEYS, secureStorage } from "../storage/secure";
 import { dbGetItem, dbSetItem } from "../storage/db";
-import { toB64, fromB64, hash, hkdfBytes, aeadEncrypt, aeadDecrypt, rand, concat, utf8, fromUtf8 } from "./signal/primitives";
+import { toB64, fromB64 } from "./signal/primitives";
+import { enc, dec, safetyDigits, sealBox, readEphPub, openBox } from "./pure"; // helperi PURI, testați (cryptoPure.test.ts)
 import { didFromKeys as didFrom, deriveAuthKey, signNonce } from "./identity";
 import { generateMnemonic, mnemonicToSeed, validateMnemonic } from "../identity/did";
 import {
@@ -42,35 +43,8 @@ const OPK_POOL = 50;   // câte generăm per reg
 const OPK_KEEP = 150;  // câte privates păstrăm în store (mărginit; ștergem cele mai vechi)
 const SPK_MAX_AGE = 7 * 24 * 3600 * 1000; // rotește signed prekey-ul după 7 zile
 
-// UTF-8 corect (emoji) — fără a depinde de TextEncoder (absent în unele runtime-uri).
-function enc(s: string): Uint8Array {
-  const bin = unescape(encodeURIComponent(s));
-  const b = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
-  return b;
-}
-function dec(b: Uint8Array): string {
-  let bin = "";
-  for (let i = 0; i < b.length; i++) bin += String.fromCharCode(b[i]);
-  return decodeURIComponent(escape(bin));
-}
-// DID + cheia de auth + base32 = helperi PURI în ./identity (testabili fără modulul nativ).
-
-/**
- * Safety number = fingerprint comun al celor două identități, pt verificare anti-MITM
- * (compari codul cu prietenul față-în-față / pe alt canal). Determinist + simetric:
- * sortăm cele două chei publice canonical, hash iterat (anti-precomputare), 60 cifre.
- * Nu e formatul exact Signal (binding-ul n-are Fingerprint API) dar e criptografic corect:
- * identic pe ambele capete DOAR dacă fiecare deține cheia reală a celuilalt.
- */
-function safetyDigits(a: Uint8Array, b: Uint8Array): string {
-  const [x, y] = toB64(a) < toB64(b) ? [a, b] : [b, a];
-  let h = hash(new Uint8Array([...x, ...y]));
-  for (let i = 0; i < 16; i++) h = hash(h);
-  let digits = "";
-  for (let i = 0; i < 60; i++) digits += (h[i % h.length] % 10).toString();
-  return digits.match(/.{1,5}/g)!.join(" ");
-}
+// enc/dec (UTF-8), safetyDigits (safety number) și sealBox/openBox (plic sealed-sender) =
+// helperi PURI mutați în ./pure (testabili fără modulul nativ). DID + cheia de auth = ./identity.
 
 export class LibsignalEngine implements CryptoEngine {
   readonly isSecure = true;
@@ -359,35 +333,19 @@ export class LibsignalEngine implements CryptoEngine {
     const peerPub = await this.ident().getIdentity(addr);
     if (!peerPub) throw new Error("Fără cheia de identitate a peer-ului (stabilește sesiunea întâi)");
     const eph = PrivateKey.generate();
-    const shared = eph.agree(peerPub);
-    const key = hkdfBytes(shared, new Uint8Array(0), "blink-sealed-v1", 32);
-    const nonce = rand(12);
+    const shared = eph.agree(peerPub); // ECDH X25519 NATIV
     const sd = this.identity?.did ?? didFrom(this.ensureKey().getPublicKey().serialized, this.authPub!);
-    const payload = utf8(JSON.stringify({ sd, t: inner.type(), c: toB64(inner.serialized) }));
-    const ct = aeadEncrypt(key, nonce, payload, new Uint8Array(0));
-    const ephPub = eph.getPublicKey().serialized;
-    const blob = concat(new Uint8Array([ephPub.length]), ephPub, nonce, ct);
+    const blob = sealBox(shared, eph.getPublicKey().serialized, { sd, t: inner.type(), c: toB64(inner.serialized) });
     this.known.add(peerDid);
     return { toDid: peerDid, sealed: toB64(blob), ts: Date.now() };
   }
 
   async decryptSealed(env: SealedEnvelope): Promise<SealedDecryptResult> {
     const blob = fromB64(env.sealed);
-    const ephLen = blob[0];
-    const ephPub = blob.slice(1, 1 + ephLen);
-    const nonce = blob.slice(1 + ephLen, 1 + ephLen + 12);
-    const ct = blob.slice(1 + ephLen + 12);
-    const shared = this.ensureKey().agree(PublicKey._fromSerialized(ephPub));
-    const key = hkdfBytes(shared, new Uint8Array(0), "blink-sealed-v1", 32);
-    const payload = JSON.parse(fromUtf8(aeadDecrypt(key, nonce, ct, new Uint8Array(0))));
+    // ECDH NATIV cu cheia efemeră din antet; restul (AEAD + gardă #6 pe `sd`) = openBox pur.
+    const shared = this.ensureKey().agree(PublicKey._fromSerialized(readEphPub(blob)));
+    const payload = openBox(shared, blob);
     const fromDid: string = payload.sd;
-    // #6 — `sd` e auto-declarat în interiorul plicului. Autenticitatea REALĂ vine de la
-    // libsignal: mesajul interior se decriptează DOAR sub sesiunea lui `sd` (un `sd` fals
-    // n-ar avea sesiunea potrivită → signalDecrypt aruncă). Gardă defensivă: respinge un `sd`
-    // malformat înainte de a-l folosi ca ProtocolAddress (evită poluarea store-ului cu nume bizare).
-    if (typeof fromDid !== "string" || !/^did:key:z[A-Za-z0-9]{16,}$/.test(fromDid)) {
-      throw new Error("sealed: expeditor (sd) invalid");
-    }
     const addr = new ProtocolAddress(fromDid, DEVICE_ID);
     const body = fromB64(payload.c);
     let pt: Uint8Array;

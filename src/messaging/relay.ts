@@ -17,21 +17,23 @@ import { createMediaSink, MediaSink, streamFileChunks, writeMedia } from "../med
 import { callManager } from "../calls/webrtc";
 import { reticulum } from "./reticulum";
 import { toB64, fromB64, utf8, fromUtf8, hash } from "../crypto/signal/primitives";
+import { ctl, parseControl } from "./codec"; // codec de control E2E (Faza 3.2) — pur, testat
+import { Outbox } from "./outbox"; // fiabilitatea livrării (Faza 3.2) — outbox/pendingAck/sweep
 
 type IncomingCb = (fromDid: string, plaintext: string, remoteId?: string, senderName?: string) => void;
 // M4 — sink = scriere streaming în fișier (nativ); parts = asamblare legacy în RAM (web/fallback)
-type MediaAsm = { meta: any; n: number; parts: string[] | null; got: number; sink: MediaSink | null; seen: Set<number> };
+type MediaAsm = { meta: any; n: number; parts: string[] | null; got: number; sink: MediaSink | null; seen: Set<number>; lastAt: number };
+
+// T2 — un transfer media la care nu mai vine nicio bucată timp de atât e ABANDONAT curat
+// (nu îngheață o intrare pe viață în RAM/fișier). Nu blochează textul: fiecare plic e tratat
+// independent la primire, deci un text venit imediat după o media incompletă ajunge oricum.
+const MEDIA_ASM_TTL_MS = 45000;
 
 function myName(): string {
   return useApp.getState().settings.profileName?.trim() || "";
 }
 
 const isDev = typeof __DEV__ !== "undefined" ? __DEV__ : false;
-
-const ACK_TIMEOUT = 6000;     // cât așteptăm un „delivered" înainte de a retrimite mesajul
-const ACK_MAX_ATTEMPTS = 8;   // resend-uri pt mesaj (acoperă un peer offline câteva minute, nu ~70s)
-const ACK_BACKOFF_CAP = 60000; // intervalul dintre resend-uri nu crește peste 60s
-const OUTACK_MAX_ATTEMPTS = 15; // re-încercări pt confirmările proprii „livrat/citit" (sesiune nepregătită)
 
 class Relay {
   private ws: WebSocket | null = null;
@@ -47,16 +49,15 @@ class Relay {
   private registered = false;   // am primit `ready` de la releu (reg confirmat)
   private regSent = false;      // am trimis deja reg pe ACEASTĂ conexiune (anti-dublu challenge)
   private regWatchdog: ReturnType<typeof setTimeout> | null = null;
-  // outbox: mesaje de trimis care așteaptă (re)conectarea — nu se pierd la conexiune capricioasă
-  private outbox: Array<{ to: string; kind: "text" | "media"; text?: string; att?: Attachment; id: string }> = [];
-  // pendingAck: mesaje PREDATE releului dar fără confirmare „delivered" — se RETRIMIT pe timeout.
-  // Rezolvă socketul-zombi după re-pair/reconectare (releul zice LIVRAT-LIVE pe un socket mort →
-  // mesajul nu ajunge → fără resend ar rămâne la o singură bifă până la restart manual).
-  private pendingAck = new Map<string, { to: string; kind: "text" | "media"; text?: string; att?: Attachment; attempts: number; nextAt: number }>();
-  // outAck: confirmările PROPRII („livrat"/„citit") care n-au putut pleca (sesiune de răspuns
-  // nepregătită la golirea cozii în rafală) — se RE-ÎNCEARCĂ, altfel expeditorul rămâne pe o bifă.
-  private outAck = new Map<string, { to: string; id: string; kind: "delivered" | "read"; attempts: number }>();
-  private ackTimer: ReturnType<typeof setInterval> | null = null;
+  // Fiabilitatea livrării (outbox + pendingAck + outAck + sweep) — Faza 3.2. Transmiterea efectivă
+  // e injectată (callback-uri spre metodele de mai jos). `pendingAck` e expus prin getter-ul de jos
+  // (testele 1.3 inspectează `relay.pendingAck`).
+  private outboxMgr = new Outbox({
+    isConnected: () => this.connected,
+    sendText: (to, text, id) => this.sendText(to, text, id),
+    sendMedia: (to, att, id) => this.sendMedia(to, att, id),
+    trySendAck: (to, id, kind) => this.trySendAck(to, id, kind),
+  });
   // A1 Reticulum: did peer → adresa lui Reticulum (învățată din payload-ul mesajelor).
   private peerReticulum = new Map<string, string>();
   // qack: id-urile mesajelor din coada offline DECRIPTATE cu succes → se confirmă releului
@@ -76,6 +77,8 @@ class Relay {
     this.seenEnv.set(fp, Date.now());
     if (this.seenEnv.size > 600) { const k = this.seenEnv.keys().next().value; if (k) this.seenEnv.delete(k); }
   }
+  // Expune coada de confirmări a outbox-ului (testele 1.3 inspectează `relay.pendingAck`).
+  private get pendingAck() { return this.outboxMgr.pendingAck; }
 
   setUrl(u: string) { this.url = u; }
   isConnected() { return this.connected; }
@@ -144,7 +147,7 @@ class Relay {
     };
     ws.onclose = () => {
       this.connected = false; this.registered = false; this.regSent = false;
-      this.stopPing(); this.stopAckSweep(); this.clearRegWatchdog(); this.scheduleRetry();
+      this.stopPing(); this.outboxMgr.stopSweep(); this.clearRegWatchdog(); this.scheduleRetry();
     };
     ws.onerror = () => {};
     ws.onmessage = (ev: any) => this.handle(ev.data);
@@ -183,8 +186,8 @@ class Relay {
     this.clearRegWatchdog();
     const did = this.myDid();
     this.sendPush();
-    this.startAckSweep();
-    this.flushOutbox();
+    this.outboxMgr.startSweep();
+    this.outboxMgr.flush();
     if (RETICULUM_GATEWAY && did) {
       reticulum.register(did).then((addr) => {
         if (addr) reticulum.startPolling((blob) => { try { this.handle(fromUtf8(fromB64(blob))); } catch {} });
@@ -206,55 +209,20 @@ class Relay {
     this.stopPing();
     this.pingTimer = setInterval(() => {
       try { this.ws?.send(JSON.stringify({ t: "ping" })); } catch {}
+      this.sweepStaleMedia(); // T2 — abandonează transferurile media înghețate
     }, 25000);
   }
   private stopPing() {
     if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
   }
 
-  // Reține un mesaj predat releului până vine „delivered". La resend (intrarea există deja)
-  // PĂSTRĂM attempts/nextAt (setate de sweep) — altfel s-ar reseta și ar retrimite la infinit.
-  private trackPending(id: string, item: { to: string; kind: "text" | "media"; text?: string; att?: Attachment }) {
-    const ex = this.pendingAck.get(id);
-    if (ex) { ex.to = item.to; ex.kind = item.kind; ex.text = item.text; ex.att = item.att; return; }
-    this.pendingAck.set(id, { ...item, attempts: 0, nextAt: Date.now() + ACK_TIMEOUT });
-  }
-
-  private startAckSweep() {
-    this.stopAckSweep();
-    this.ackTimer = setInterval(() => this.ackSweep(), 3000);
-  }
-  private stopAckSweep() {
-    if (this.ackTimer) { clearInterval(this.ackTimer); this.ackTimer = null; }
-  }
-  // Retrimite mesajele neconfirmate ajunse la timeout (același msgId → receptorul face dedupe)
-  // ȘI re-încearcă confirmările proprii care n-au putut pleca (sesiune nepregătită la flush).
-  private ackSweep() {
-    if (!this.connected) return;
-    const now = Date.now();
-    for (const [id, p] of this.pendingAck) {
-      if (now < p.nextAt) continue;
-      if (p.attempts >= ACK_MAX_ATTEMPTS) { this.pendingAck.delete(id); continue; } // renunță (rămâne ✓)
-      p.attempts++;
-      p.nextAt = now + Math.min(ACK_TIMEOUT * Math.pow(1.8, p.attempts), ACK_BACKOFF_CAP); // backoff plafonat
-      if (p.kind === "text") void this.sendText(p.to, p.text!, id);
-      else if (p.att) void this.sendMedia(p.to, p.att, id);
-    }
-    // re-trimite confirmările de livrare/citire blocate (sesiunea spre expeditor s-a încălzit între timp)
-    for (const [key, a] of this.outAck) {
-      a.attempts++;
-      if (a.attempts > OUTACK_MAX_ATTEMPTS) { this.outAck.delete(key); continue; }
-      void this.trySendAck(a.to, a.id, a.kind).then((ok) => { if (ok) this.outAck.delete(key); });
-    }
-  }
-
-  private flushOutbox() {
-    if (!this.outbox.length) return;
-    const items = this.outbox;
-    this.outbox = [];
-    for (const it of items) {
-      if (it.kind === "text") this.sendText(it.to, it.text!, it.id);
-      else if (it.att) this.sendMedia(it.to, it.att, it.id);
+  /** T2 — mătură transferurile media incomplete la care n-a mai venit nimic de MEDIA_ASM_TTL_MS. */
+  private sweepStaleMedia(now = Date.now()) {
+    for (const [key, a] of this.mediaAsm) {
+      if (now - a.lastAt > MEDIA_ASM_TTL_MS) {
+        a.sink?.abort(); // eliberează fișierul parțial (dacă e sink nativ)
+        this.mediaAsm.delete(key);
+      }
     }
   }
 
@@ -272,13 +240,10 @@ class Relay {
     try { if (this.connected && did) this.ws?.send(JSON.stringify({ t: "dereg", did })); } catch {}
     if (this.retry) { clearTimeout(this.retry); this.retry = null; }
     this.stopPing();
-    this.stopAckSweep();
+    this.outboxMgr.clear();
     try { this.ws?.close(); } catch {}
     this.ws = null;
     this.connected = false;
-    this.outbox = [];
-    this.pendingAck.clear();
-    this.outAck.clear();
     if (this.qackTimer) { clearTimeout(this.qackTimer); this.qackTimer = null; }
     this.qackBuf.clear();
     this.peerReticulum.clear();
@@ -328,69 +293,64 @@ class Relay {
         // aceluiași mesaj n-ar mai putea fi decriptată → confirmă releului să-l scoată din coadă.
         // Eșecul de decriptare (catch) NU confirmă → mesajul rămâne în coadă pt re-încercare.
         if (qid) this.queueAck(qid);
-        let parsed: any = null;
-        try { parsed = JSON.parse(plaintext); } catch {}
-        if (parsed && parsed.k === "a" && parsed.id) {
-          // confirmare (bifă): urcă starea mesajului propriu
-          const status = parsed.s === "read" ? "read" : "delivered";
-          useApp.getState().markMsgStatus(env.fromDid, parsed.id, status);
-          this.pendingAck.delete(parsed.id); // confirmat → nu mai retrimite
-          return;
-        }
-        if (parsed && parsed.k === "e" && parsed.id) { // editare de la peer
-          useApp.getState().applyRemoteEdit(env.fromDid, parsed.id, parsed.b ?? "");
-          return;
-        }
-        if (parsed && parsed.k === "d" && parsed.id) { // ștergere mesaj de la peer
-          useApp.getState().applyRemoteDelete(env.fromDid, parsed.id);
-          return;
-        }
-        if (parsed && parsed.k === "dc") { // ștergere conversație de la peer
-          useApp.getState().applyRemoteDeleteConv(env.fromDid);
-          return;
-        }
-        if (parsed && parsed.k === "call" && parsed.sig) { // semnalizare apel WebRTC (Faza 5)
-          callManager.handleSignal(env.fromDid, parsed.sig);
-          return;
-        }
-        if (parsed && parsed.k === "mh" && parsed.id) {
-          // antet media: pregătește reasamblarea — sink nativ (streaming) sau parts (legacy)
-          const meta = parsed.meta || {};
-          const sink = createMediaSink(parsed.id, meta.kind, meta.name);
-          this.mediaAsm.set(env.fromDid + ":" + parsed.id, {
-            meta, n: parsed.n, got: 0, sink, parts: sink ? null : new Array(parsed.n), seen: new Set(),
-          });
-          return;
-        }
-        if (parsed && parsed.k === "mc" && parsed.id) {
-          // bucată media: scrie în fișier (sink) sau în array (legacy); când e completă → mesaj
-          const key = env.fromDid + ":" + parsed.id;
-          const a = this.mediaAsm.get(key);
-          if (!a || a.seen.has(parsed.i)) return; // dedupe după index
-          try {
-            if (a.sink) a.sink.writeChunk(parsed.i, parsed.d);
-            else a.parts![parsed.i] = parsed.d;
-          } catch { a.sink?.abort(); this.mediaAsm.delete(key); return; }
-          a.seen.add(parsed.i);
-          a.got++;
-          if (a.got >= a.n) {
-            this.mediaAsm.delete(key);
-            try {
-              const uri = a.sink ? a.sink.finish() : await writeMedia(parsed.id, a.meta.kind, a.meta.name, a.parts!.join(""));
-              const att: Attachment = { kind: a.meta.kind, uri, name: a.meta.name, size: a.meta.size, durationMs: a.meta.dur, width: a.meta.w, height: a.meta.h };
-              useApp.getState().receiveMessage(env.fromDid, "", parsed.id, att, a.meta.n);
-              this.sendAck(env.fromDid, parsed.id, "delivered");
-            } catch { a.sink?.abort(); /* asamblare eșuată — renunță */ }
+        const c = parseControl(plaintext); // codec pur (Faza 3.2) — clasifică mesajul de control
+        switch (c.k) {
+          case "a": // confirmare (bifă): urcă starea mesajului propriu
+            useApp.getState().markMsgStatus(env.fromDid, c.id, c.s);
+            this.outboxMgr.onDelivered(c.id); // confirmat → nu mai retrimite
+            return;
+          case "e": // editare de la peer
+            useApp.getState().applyRemoteEdit(env.fromDid, c.id, c.b);
+            return;
+          case "d": // ștergere mesaj de la peer
+            useApp.getState().applyRemoteDelete(env.fromDid, c.id);
+            return;
+          case "dc": // ștergere conversație de la peer
+            useApp.getState().applyRemoteDeleteConv(env.fromDid);
+            return;
+          case "call": // semnalizare apel WebRTC (Faza 5)
+            callManager.handleSignal(env.fromDid, c.sig);
+            return;
+          case "mh": { // antet media: pregătește reasamblarea — sink nativ (streaming) sau parts (legacy)
+            const sink = createMediaSink(c.id, c.meta.kind, c.meta.name);
+            this.mediaAsm.set(env.fromDid + ":" + c.id, {
+              meta: c.meta, n: c.n, got: 0, sink, parts: sink ? null : new Array(c.n), seen: new Set(), lastAt: Date.now(),
+            });
+            return;
           }
-          return;
+          case "mc": { // bucată media: scrie în fișier (sink) sau în array (legacy); când e completă → mesaj
+            const key = env.fromDid + ":" + c.id;
+            const a = this.mediaAsm.get(key);
+            if (!a || a.seen.has(c.i)) return; // dedupe după index
+            try {
+              if (a.sink) a.sink.writeChunk(c.i, c.d);
+              else a.parts![c.i] = c.d;
+            } catch { a.sink?.abort(); this.mediaAsm.delete(key); return; }
+            a.seen.add(c.i);
+            a.got++;
+            a.lastAt = Date.now(); // transfer viu → resetează ceasul de abandon
+            if (a.got >= a.n) {
+              this.mediaAsm.delete(key);
+              try {
+                const uri = a.sink ? a.sink.finish() : await writeMedia(c.id, a.meta.kind, a.meta.name, a.parts!.join(""));
+                const att: Attachment = { kind: a.meta.kind, uri, name: a.meta.name, size: a.meta.size, durationMs: a.meta.dur, width: a.meta.w, height: a.meta.h };
+                useApp.getState().receiveMessage(env.fromDid, "", c.id, att, a.meta.n);
+                this.sendAck(env.fromDid, c.id, "delivered");
+              } catch { a.sink?.abort(); /* asamblare eșuată — renunță */ }
+            }
+            return;
+          }
+          case "t":
+          case "raw": { // mesaj text (sau fallback de la un peer vechi, fără înveliș)
+            const body = c.k === "t" ? (c.b ?? "") : c.b;
+            const remoteId = c.k === "t" ? c.id : undefined;
+            const senderName = c.k === "t" ? c.n : undefined;
+            if (c.k === "t" && c.ra) this.peerReticulum.set(env.fromDid, c.ra); // învață adresa Reticulum a peer-ului
+            this.incoming?.(env.fromDid, body, remoteId, senderName);
+            if (remoteId) this.sendAck(env.fromDid, remoteId, "delivered"); // ✓✓ livrat, automat
+            return;
+          }
         }
-        // mesaj text (sau fallback dacă vine de la un peer vechi, fără înveliș)
-        const body = parsed && parsed.k === "t" ? parsed.b : plaintext;
-        const remoteId = parsed && parsed.k === "t" ? parsed.id : undefined;
-        const senderName = parsed && parsed.k === "t" ? parsed.n : undefined;
-        if (parsed && parsed.ra) this.peerReticulum.set(env.fromDid, parsed.ra); // învață adresa Reticulum a peer-ului
-        this.incoming?.(env.fromDid, body, remoteId, senderName);
-        if (remoteId) this.sendAck(env.fromDid, remoteId, "delivered"); // ✓✓ livrat, automat
       } catch {
         // #5 — marchează „re-pair" DOAR pt un contact cu care AVEM o sesiune (desincronizare
         // reală de ratchet), nu pentru plicuri gunoi/replay/spoof de la necunoscuți (altfel
@@ -425,10 +385,6 @@ class Relay {
     return true;
   }
 
-  private queueOut(item: { to: string; kind: "text" | "media"; text?: string; att?: Attachment; id: string }) {
-    if (!this.outbox.some((x) => x.id === item.id)) this.outbox.push(item); // dedupe după id
-  }
-
   /** Sealed sender activ? (toggle settings + motor care suportă). */
   private sealedOn(): boolean {
     return !!useApp.getState().settings.sealedSender && !!engine.encryptSealed;
@@ -461,14 +417,14 @@ class Relay {
 
   /** Trimite un text criptat E2E către un DID; msgId leagă bifele de confirmare. */
   async sendText(peerDid: string, plaintext: string, msgId: string): Promise<{ ok: boolean; reason?: string }> {
-    if (!this.connected) { this.queueOut({ to: peerDid, kind: "text", text: plaintext, id: msgId }); return { ok: true, reason: "queued" }; }
+    if (!this.connected) { this.outboxMgr.queueOut({ to: peerDid, kind: "text", text: plaintext, id: msgId }); return { ok: true, reason: "queued" }; }
     const has = await this.ensureSession(peerDid);
     if (!has) return { ok: false, reason: "no-bundle" };
-    const env = await this.encryptFor(peerDid, JSON.stringify({ k: "t", id: msgId, b: plaintext, n: myName(), ra: reticulum.myAddr ?? undefined }));
+    const env = await this.encryptFor(peerDid, JSON.stringify(ctl.text(msgId, plaintext, myName(), reticulum.myAddr ?? undefined)));
     try { await this.transmit(peerDid, env); }
-    catch { this.queueOut({ to: peerDid, kind: "text", text: plaintext, id: msgId }); return { ok: false, reason: "send-failed" }; }
+    catch { this.outboxMgr.queueOut({ to: peerDid, kind: "text", text: plaintext, id: msgId }); return { ok: false, reason: "send-failed" }; }
     useApp.getState().markMsgStatus(peerDid, msgId, "sent"); // ✓ predat releului
-    this.trackPending(msgId, { to: peerDid, kind: "text", text: plaintext });
+    this.outboxMgr.trackPending(msgId, { to: peerDid, kind: "text", text: plaintext });
     return { ok: true };
   }
 
@@ -479,24 +435,24 @@ class Relay {
 
   /** Trimite un atașament criptat E2E pe bucăți, STREAMING (M4 — fără tot fișierul în RAM). */
   async sendMedia(peerDid: string, att: Attachment, msgId: string): Promise<{ ok: boolean; reason?: string }> {
-    if (!this.connected) { this.queueOut({ to: peerDid, kind: "media", att, id: msgId }); return { ok: true, reason: "queued" }; }
+    if (!this.connected) { this.outboxMgr.queueOut({ to: peerDid, kind: "media", att, id: msgId }); return { ok: true, reason: "queued" }; }
     if (!(await this.ensureSession(peerDid))) return { ok: false, reason: "no-bundle" };
     let mhSent = false;
     try {
       const res = await streamFileChunks(att.uri, async (b64, i, total) => {
         if (!mhSent) {
           const meta = { kind: att.kind, name: att.name, dur: att.durationMs, w: att.width, h: att.height, size: att.size, n: myName() };
-          await this.sendCtl(peerDid, { k: "mh", id: msgId, n: total, meta });
+          await this.sendCtl(peerDid, ctl.mediaHeader(msgId, total, meta));
           mhSent = true;
         }
-        await this.sendCtl(peerDid, { k: "mc", id: msgId, i, d: b64 });
+        await this.sendCtl(peerDid, ctl.mediaChunk(msgId, i, b64));
       });
       if (!res) return { ok: false, reason: "too-big" };
     } catch {
       return { ok: false, reason: "send-failed" };
     }
     useApp.getState().markMsgStatus(peerDid, msgId, "sent");
-    this.trackPending(msgId, { to: peerDid, kind: "media", att });
+    this.outboxMgr.trackPending(msgId, { to: peerDid, kind: "media", att });
     return { ok: true };
   }
 
@@ -505,8 +461,7 @@ class Relay {
     const ok = await this.trySendAck(peerDid, id, kind);
     if (!ok) {
       // n-a putut pleca acum (offline / sesiune de răspuns nepregătită la flush) → re-încearcă în sweep
-      this.outAck.set(`${peerDid}|${id}|${kind}`, { to: peerDid, id, kind, attempts: 0 });
-      this.startAckSweep();
+      this.outboxMgr.retryOutAck(peerDid, id, kind);
     }
   }
 
@@ -515,7 +470,7 @@ class Relay {
     if (!this.connected) return false;
     if (!(await this.ensureSession(peerDid))) return false;
     try {
-      const env = await this.encryptFor(peerDid, JSON.stringify({ k: "a", id, s: kind }));
+      const env = await this.encryptFor(peerDid, JSON.stringify(ctl.ack(id, kind)));
       await this.transmit(peerDid, env);
       return true;
     } catch { return false; }
@@ -534,13 +489,13 @@ class Relay {
     try { await this.sendCtl(peerDid, obj); } catch {}
   }
   /** Anunță peer-ul că ai editat un mesaj (msgId = id-ul tău local). */
-  sendEdit(peerDid: string, msgId: string, text: string) { return this.sendControl(peerDid, { k: "e", id: msgId, b: text }); }
+  sendEdit(peerDid: string, msgId: string, text: string) { return this.sendControl(peerDid, ctl.edit(msgId, text)); }
   /** Anunță peer-ul să șteargă un mesaj de la tine. */
-  sendDeleteMsg(peerDid: string, msgId: string) { return this.sendControl(peerDid, { k: "d", id: msgId }); }
+  sendDeleteMsg(peerDid: string, msgId: string) { return this.sendControl(peerDid, ctl.delMsg(msgId)); }
   /** Anunță peer-ul să șteargă întreaga conversație cu tine. */
-  sendDeleteConv(peerDid: string) { return this.sendControl(peerDid, { k: "dc" }); }
+  sendDeleteConv(peerDid: string) { return this.sendControl(peerDid, ctl.delConv()); }
   /** Trimite un semnal de apel WebRTC (offer/answer/ice/end) criptat E2E. */
-  sendCallSignal(peerDid: string, sig: any) { return this.sendControl(peerDid, { k: "call", sig }); }
+  sendCallSignal(peerDid: string, sig: any) { return this.sendControl(peerDid, ctl.call(sig)); }
 }
 
 export const relay = new Relay();

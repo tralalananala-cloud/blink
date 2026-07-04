@@ -1,113 +1,139 @@
 # Blink
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Android-3ddc84.svg)](https://github.com/tralalananala-cloud/blink/releases/latest)
-[![Latest release](https://img.shields.io/github/v/release/tralalananala-cloud/blink)](https://github.com/tralalananala-cloud/blink/releases/latest)
-[![Encryption](https://img.shields.io/badge/crypto-libsignal%20%2B%20post--quantum-7c3aed.svg)](SECURITY.md)
-[![Website](https://img.shields.io/badge/website-blinkmessenger.vercel.app-0ea5e9.svg)](https://blinkmessenger.vercel.app)
+> Messenger **end-to-end criptat**, descentralizat-minimal — **Android**.
+> Estetică cypherpunk dark-first. React Native + Expo.
 
-> A decentralized, end-to-end-encrypted messenger. **No phone number, no email** —
-> your identity is a key you hold. Post-quantum encryption via the official libsignal.
+Blink criptează conținutul mesajelor cap-la-cap cu **libsignal** (motorul oficial Signal):
+X3DH + Double Ratchet + **PQXDH post-quantum (Kyber / ML-KEM)**. Identitatea ta e o cheie
+care trăiește **doar pe dispozitiv** — fără număr de telefon, fără email. Mesajele trec
+printr-un releu minimal care **nu le poate citi** (sealed sender: nu vede nici cine trimite).
 
-Blink is a privacy-first chat app: messages are encrypted on your device with
-**libsignal** (X3DH + **PQXDH post-quantum / Kyber-ML-KEM** + Double Ratchet), the same
-protocol family Signal uses, but **without requiring a phone number or email**. The relay
-that forwards your traffic is *blind* — it cannot read messages, and with **sealed sender**
-it does not learn who sent them.
+Fluxul complet (handshake → mesaje text/media/voce → bife → persistență → reconectare) e
+**validat E2E pe device** (telefon arm64 ↔ emulator x86_64) prin releul live.
 
-> ⚠️ **Honest status.** Blink uses audited primitives (libsignal, [@noble](https://github.com/paulmillr/noble-hashes) audited by Cure53),
-> but **our integration has not been independently audited.** We do **not** display an
-> "AUDITED" badge. Android is the supported platform; desktop is parked and iOS is not yet
-> shipped. Read [SECURITY.md](SECURITY.md) for the full threat model — what we protect and
-> what we don't (network metadata / IP is still visible to the relay; Tor/I2P is on the roadmap).
+> **Onestitate înainte de marketing.** Integrarea Blink folosește primitive auditate
+> (libsignal, @noble/Cure53), dar **integrarea în sine NU a fost auditată independent** și
+> rulează doar pe Android. Vezi [Threat model](#threat-model) și [`SECURITY.md`](SECURITY.md).
 
-## Why Blink
+---
 
-- **No identifiers.** Identity is a `did:key` on your device + a BIP39 recovery phrase. No phone, no email, no PII.
-- **Post-quantum content encryption.** libsignal with PQXDH (Kyber/ML-KEM) — on par with Signal, ahead of most.
-- **Sealed sender.** The relay routes by recipient only; it does not see who sent a message.
-- **On-device hardening.** App lock + per-conversation passwords, disappearing messages, anti-screenshot, encrypted SQLite storage (ChaCha20-Poly1305), keys in the Android Keystore.
-- **Anti-MITM.** Safety numbers (SHA-256 over both real identity keys) with QR verification and key-change alerts.
-- **No telemetry, no analytics, no "calling home."**
+## Ce e și ce NU e
 
-## Install
+| Livrat & validat pe device | Amânat explicit (scope v1 înghețat) |
+|---|---|
+| **libsignal** real: X3DH + Double Ratchet + **PQXDH/Kyber** post-quantum | Apeluri audio/video **WebRTC** (cod prezent, netestat fizic) |
+| Sealed sender (releul nu vede expeditorul) | Grupuri **MLS** |
+| Releu Cloudflare orb + auth challenge-response (Ed25519) | **Desktop** (Electron) — parcat, fără libsignal nativ |
+| At-rest criptat: SQLite + ChaCha20-Poly1305, chei în Android Keystore | **iOS** (necesită cont Apple + tuning CocoaPods) |
+| Identitate DID:key + frază de recuperare BIP39 + safety number anti-MITM | Transport peste **Tor / I2P / Reticulum** |
+| Text, poze, video, fișiere, note vocale; edit/delete; teme; app-lock + parolă per-conv | F-Droid / push fără Google |
 
-- **Android (now):** download the latest signed APK from [Releases](https://github.com/tralalananala-cloud/blink/releases/latest) (`arm64-v8a` for most phones). Every build ships with a SHA-256 to verify.
-- **F-Droid / IzzyOnDroid (in progress):** Fastlane metadata lives in [`fastlane/`](fastlane/). Inclusion in the main F-Droid repo requires a Google-free build (the app currently uses Firebase Cloud Messaging for push) plus reproducible builds — both on the roadmap. An IzzyOnDroid listing (which builds from GitHub Releases and flags the FCM anti-feature) is the nearer-term path.
-- **Desktop / iOS:** not shipped yet — see [the website](https://blinkmessenger.vercel.app/download).
+**Cheie de design:** tot UI-ul vorbește cu interfața `CryptoEngine` (`src/crypto/types.ts`) —
+niciun ecran nu atinge primitive criptografice direct. Există **un singur motor pe sârmă**:
+`libsignalEngine.ts` (nativ, Android). Vechiul motor pur-JS (`signalEngine.ts` +
+`signal/{x3dh,doubleRatchet}.ts`) a fost **șters** la auditul din 2026-06-24 — era un al
+doilea format pe sârmă, incompatibil. Pe web, `crypto/index.ts` întoarce un stub onest
+(`UnavailableEngine`); desktopul e parcat.
 
-## Architecture
+---
+
+## Arhitectură
 
 ```
-.                      React Native / Expo app (Android) — expo-router, zustand, i18n RO+EN
-├── app/               Screens (file-based routing)
-├── src/
-│   ├── crypto/        CryptoEngine interface — UI talks ONLY to this.
-│   │                  libsignalEngine.ts = real X3DH + Double Ratchet + PQXDH (native, Android)
-│   │                  signalEngine.ts    = pure-JS X3DH/Double Ratchet over @noble (desktop)
-│   ├── messaging/     relay.ts = WebSocket client + offline outbox + delivery acks
-│   ├── crypto/signal/ X3DH / Double Ratchet building blocks
-│   ├── identity/      did.ts = mnemonic, did:key, safety number
-│   ├── storage/       db.ts = encrypted KV (ChaCha20-Poly1305), secure.ts = SecureStore wrapper
-│   ├── security/      lock.ts = app + per-conversation passcodes
-│   ├── media/         wire.ts = chunked encrypted media transfer
-│   └── state/         store.ts = zustand + encrypted persist
-├── desktop/           Electron wrapper over the Expo web export (parked; see SECURITY.md)
-└── relay/             Cloudflare Worker + Durable Object — the blind store-and-forward relay
-    └── cf-worker/     src/index.js = Worker + Relay DO (WebSocket Hibernation, SQLite, sharded per-DID)
+app/                         # rute (expo-router, file-based)
+  _layout.tsx                # fonturi + provideri + garda de securitate
+  index.tsx                  # poarta: onboarding vs tabs
+  onboarding/                # welcome → identitate → frază → biometrie
+  (tabs)/                    # chats / contacts / vault / settings
+  chat/[id].tsx              # conversația (prezentational + hooks de stare)
+src/
+  crypto/      types.ts          # CONTRACTUL motorului (UI vorbește DOAR cu el)
+               libsignalEngine.ts # libsignal REAL: PQXDH + Double Ratchet (nativ, Android)
+               signal/primitives.ts # wrappere @noble partajate (db/lock/relay)
+               index.ts          # libsignal pe nativ, UnavailableEngine pe web
+  messaging/   relay.ts          # client WS: connect/bundle/session/send/ack/edit
+               codec.ts outbox.ts # codec control + fiabilitate livrare (at-least-once)
+  storage/     db.ts             # KV criptat (ChaCha20-Poly1305, cheie în SecureStore)
+               messages.ts       # mesaje în SQLite criptat (write-through O(1)/eveniment)
+               secure.ts         # SecureStore (Keystore) + fallback web
+  security/    lock.ts           # app-lock + parolă per-conversație
+  identity/    did.ts            # DID:key + frază recuperare BIP39 + safety number
+  state/       store.ts          # zustand (slices) + persist criptat — ZERO chei private
+  i18n/        ro.ts en.ts       # RO + EN
+  components/                    # Card, GlowButton, MeshBackground, chat/*, ...
+__tests__/                       # crypto pur, identitate, relay wire, store, migrare, ...
 ```
 
-The relay is **stateless about content**: it stores encrypted envelopes for offline delivery,
-routes by recipient DID (sharded Durable Objects), and runs **zero-log** (no DID/metadata logging).
-Secrets (FCM push credentials) live in Worker secrets, never in the repo.
+Releu: `~/cipher-relay/cf-worker` — Cloudflare Worker + Durable Object (`Relay`,
+WebSocket Hibernation, storage SQLite). Auth challenge-response, coadă offline at-least-once,
+push FCM. Site: `~/cipher-site` → blinkmessenger.vercel.app.
 
-## Build
+### Decizii de securitate baked-in
+- Cheile private / fraza de recuperare trec **doar** prin Android Keystore
+  (`expo-secure-store`, `WHEN_UNLOCKED_THIS_DEVICE_ONLY`). Niciodată AsyncStorage/fișiere simple.
+- `state/store.ts` ține doar identitatea **publică** + conversații; zero secrete.
+- **DID = `base32(sha256(idKey ‖ authPub))`** — commitment criptografic, verificat la
+  stabilirea sesiunii + la releu (un releu compromis nu poate substitui cheia → MITM la
+  primul contact blocat criptografic, nu doar prin safety number).
+- Fără telemetrie, fără analytics, fără SDK-uri care „sună acasă". Releul e **zero-log**.
+- `expo-screen-capture` (anti screenshot/recording) + igienă RAM la fundal.
 
-### Mobile app (Android)
+---
 
-Requires **Node 20** (Expo SDK 52 breaks on newer Node), a JDK 17, and the Android SDK.
+## Threat model
+
+Aliniat cu [`SECURITY.md`](SECURITY.md) (sursa canonică — citește-o pentru detalii).
+
+**Protejăm:**
+- **Conținutul mesajelor** — E2EE prin libsignal (X3DH + PQXDH + Double Ratchet). Releul nu citește.
+- **Identitate fără PII** — cheie pe dispozitiv (DID:key), fără telefon/email. Recuperare BIP39.
+- **Anti-MITM** — safety number (SHA-256 peste ambele chei reale) + verificare QR + alertă la schimbare de cheie + binding DID↔cheie.
+- **Sealed sender** — releul nu vede CINE trimite (doar destinatarul, pentru rutare).
+- **La repaus (Android)** — chei în Keystore, mesaje în SQLite criptat (ChaCha20-Poly1305).
+
+**NU protejăm (limitări asumate):**
+- **Metadate de rețea** — releul (Cloudflare) vede **IP, timing, volum**. Sealed sender
+  ascunde DID-ul expeditorului, NU calea de rețea. Tor/I2P = pe roadmap, nelivrat.
+- **Impersonare pe contacte NEVERIFICATE** — plicul sealed nu autentifică expeditorul la
+  nivel exterior (`sd` auto-declarat); autenticitatea reală vine din interior (mesajul
+  libsignal se decriptează doar sub sesiunea corectă) + safety number. Pe un contact nou,
+  verifică safety number-ul.
+- **Dispozitiv compromis** — root/keylogger/malware înfrânge orice messenger.
+- **Neauditat independent** — primitivele sunt auditate, integrarea Blink nu.
+- **Doar Android** — desktopul (Electron) e parcat; pe el secretele ar sta în localStorage
+  necriptat. Calea sigură e Android.
+
+---
+
+## Build (Android)
+
+> Necesită **Node 20** (Expo SDK 52 nu merge pe Node nou). `JAVA_HOME` = JDK 17, Android SDK.
+> Build-ul produce APK-uri per-ABI (arm64/armv7/x86_64) ~88–100 MB.
 
 ```bash
-export JAVA_HOME=/path/to/jdk-17
-export ANDROID_HOME=/path/to/Android/Sdk
-npm install --legacy-peer-deps
+cd ~/cipher
+export JAVA_HOME=~/Android/jdk-17.0.19+10 ANDROID_HOME=~/Android/Sdk
+export PATH=~/.local/node20/bin:$JAVA_HOME/bin:$PATH
 npx expo prebuild --clean
 cd android && ./gradlew assembleRelease
+# → android/app/build/outputs/apk/release/app-arm64-v8a-release.apk
+adb install -r android/app/build/outputs/apk/release/app-arm64-v8a-release.apk
 ```
 
-Output APKs are split per ABI in `android/app/build/outputs/apk/release/`
-(`arm64-v8a` ≈ 97 MB is the one most phones need). Install with `adb install -r <apk>`.
+iOS: **nu** se compilează de pe Linux (necesită cont Apple + EAS) — amânat (vezi tabelul de scope).
 
-> Note: a forked build needs your own `google-services.json` (for FCM push) and your own
-> release keystore. The committed `app.json` references an Expo project (`extra.eas.projectId`)
-> owned by the original author — run `eas init` to point it at yours, or remove it for a
-> local-only build.
-
-### Relay (Cloudflare Worker)
-
+### Teste & poarta „safe to build"
 ```bash
-cd relay/cf-worker
-npm install
-npx wrangler deploy
+bash scripts/check.sh   # Node 20 + tsc --noEmit + jest --ci + expo export web
 ```
+Poarta trebuie să fie **verde** înainte de orice release.
 
-Set the FCM push secrets with `wrangler secret put FCM_CLIENT_EMAIL / FCM_PRIVATE_KEY / FCM_PROJECT_ID`.
-`relay/server.js` is a Node dev relay for LAN testing only.
+---
 
-### Tests
+## Scope v1 (înghețat)
 
-```bash
-npx tsc          # type-check
-npx jest         # unit tests (session / crypto contract)
-```
+**v1 = chat 1:1 securizat pe Android.** Atât. Amânate explicit, în spatele interfețelor,
+fără a bloca v1: apeluri WebRTC, grupuri MLS, desktop, iOS, transport Tor/I2P/Reticulum,
+F-Droid/push fără Google. Vezi `HARDENING_PLAN.md` (Faza 5) pentru Definition of Done.
 
-## Security
-
-See **[SECURITY.md](SECURITY.md)** for the threat model and the internal audit results.
-To report a vulnerability, open a private GitHub Security Advisory on this repository.
-Coordinated disclosure; no legal action against good-faith research.
-
-## License
-
-[GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0). If you run a modified Blink
-relay or service for others, you must make your source available to them.
+Licență: **AGPL-3.0**. Raportare vulnerabilități: GitHub Security Advisory privat (vezi `SECURITY.md`).

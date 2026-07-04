@@ -4,22 +4,8 @@
  * în SecureStore (Keystore). Verificarea re-derivă hash-ul și compară.
  */
 import { KEYS, secureStorage } from "../storage/secure";
-import { equal, fromB64, hash, rand, toB64, utf8 } from "../crypto/signal/primitives";
-import { scrypt } from "@noble/hashes/scrypt";
-
-// #4 — KDF LENT (scrypt) pt parole: un PIN scurt nu mai e brute-force-abil rapid dacă
-// hash-ul e extras. Prefix „s1:" marchează formatul nou; parolele vechi (SHA-256, fără
-// prefix) sunt încă verificate (compat înapoi), ca să nu blocăm userii existenți.
-function legacyDigest(saltB64: string, pin: string): string {
-  return toB64(hash(utf8(saltB64 + "::" + pin)));
-}
-function scryptDigest(saltB64: string, pin: string): string {
-  return "s1:" + toB64(scrypt(utf8(pin), fromB64(saltB64), { N: 16384, r: 8, p: 1, dkLen: 32 }));
-}
-// #6 — comparație în timp constant (pe octeți), nu `===`.
-function constEq(a: string, b: string): boolean {
-  return equal(utf8(a), utf8(b));
-}
+import { rand, toB64 } from "../crypto/signal/primitives";
+import { legacyDigest, verifyDigest } from "./passcode"; // digest+verify PUR, testat (passcode.test.ts)
 
 const APP_SALT = "cipher.lock.app.salt";
 const APP_HASH = "cipher.lock.app.hash";
@@ -38,9 +24,7 @@ async function verify(saltKey: string, hashKey: string, pin: string): Promise<bo
   const salt = await secureStorage.getSecret(saltKey);
   const stored = await secureStorage.getSecret(hashKey);
   if (!salt || !stored) return false;
-  // alege algoritmul după prefix (compat cu parolele vechi SHA-256, fără prefix)
-  const computed = stored.startsWith("s1:") ? scryptDigest(salt, pin) : legacyDigest(salt, pin);
-  return constEq(computed, stored);
+  return verifyDigest(salt, pin, stored); // alege algoritmul după prefix (compat legacy)
 }
 
 // --- App lock ---

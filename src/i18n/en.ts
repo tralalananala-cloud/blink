@@ -52,6 +52,13 @@ export const en = {
       "Your keys are stored in the device keystore. Unlock with your fingerprint or face.",
     bioEnable: "Enable biometric unlock",
     bioSkip: "Skip for now",
+    batteryTitle: "Notifications when the app is closed",
+    batteryBody:
+      "OPPO/ColorOS phones (and Xiaomi, Huawei) kill background apps and cut notifications. To receive messages while Blink is closed, allow „Autostart\" and „No battery restrictions\".",
+    batteryNote:
+      "This is a manufacturer limitation, not Blink — Signal and WhatsApp need it too. You only do it once.",
+    batteryOpen: "Open battery settings",
+    batterySkip: "Skip for now",
   },
   tabs: {
     chats: "Chats",
@@ -194,6 +201,11 @@ export const en = {
     disappearingBody: "Delete messages after you read them.",
     off: "Off",
     burnNote: "Read messages vanish after the timer.",
+    deleteBoth: "Delete conversation for both",
+    deleteBothBody: "Clears the conversation on your side and theirs.",
+    deleteBothConfirm: "Delete for both",
+    deleteBothWarn:
+      "Cooperative, not guaranteed — a contact with a backup, screenshot or modified client can keep the messages.",
   },
   security: {
     insecureBanner:
