@@ -1,6 +1,7 @@
 # Blink
 
-> Messenger **end-to-end criptat**, descentralizat-minimal — **Android**.
+> Messenger **end-to-end criptat** — **Android**. Azi rulează printr-un **releu unic**
+> (Cloudflare) care nu poate citi nimic; descentralizarea reală (multi-releu / mesh) e pe roadmap.
 > Estetică cypherpunk dark-first. React Native + Expo.
 
 Blink criptează conținutul mesajelor cap-la-cap cu **libsignal** (motorul oficial Signal):
