@@ -42,6 +42,10 @@ export interface SerializedBundle {
   opkPub?: string;
   /** libsignal: bundle complet (JSON base64) — câmp opac purtat prin releu. */
   ls?: string;
+  /** A1: semnătura Ed25519 (authPriv) peste string-ul `ls` canonic → leagă TOT bundle-ul
+   *  (inclusiv kyber) de authPub. Un releu compromis nu poate șterge/altera câmpuri fără
+   *  s-o invalideze. Opțional în release-ul N (Decizia #0 A: warn dacă lipsește), impus în N+1. */
+  lsSig?: string;
   /** #4: one-time prekey POPat de releu pt acest fetch (unic per contact). */
   opk?: { id: number; pub: string };
 }

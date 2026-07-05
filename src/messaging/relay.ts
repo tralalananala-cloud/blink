@@ -312,8 +312,14 @@ class Relay {
             callManager.handleSignal(env.fromDid, c.sig);
             return;
           case "mh": { // antet media: pregătește reasamblarea — sink nativ (streaming) sau parts (legacy)
+            const key = env.fromDid + ":" + c.id;
+            // C2.4: un mh NOU peste un transfer în curs (resend al expeditorului după o
+            // întrerupere) — abortează sink-ul vechi ÎNAINTE de a crea unul nou. Fără asta,
+            // două sink-uri scriu concurent în același fișier media/<id> (createMediaSink face
+            // delete+create sub mâna celuilalt) → fișier corupt = poza „crăpată" la finalizare.
+            this.mediaAsm.get(key)?.sink?.abort();
             const sink = createMediaSink(c.id, c.meta.kind, c.meta.name);
-            this.mediaAsm.set(env.fromDid + ":" + c.id, {
+            this.mediaAsm.set(key, {
               meta: c.meta, n: c.n, got: 0, sink, parts: sink ? null : new Array(c.n), seen: new Set(), lastAt: Date.now(),
             });
             return;

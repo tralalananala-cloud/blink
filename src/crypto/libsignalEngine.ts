@@ -27,7 +27,7 @@ import { KEYS, secureStorage } from "../storage/secure";
 import { dbGetItem, dbSetItem } from "../storage/db";
 import { toB64, fromB64 } from "./signal/primitives";
 import { enc, dec, safetyDigits, sealBox, readEphPub, openBox } from "./pure"; // helperi PURI, testați (cryptoPure.test.ts)
-import { didFromKeys as didFrom, deriveAuthKey, signNonce } from "./identity";
+import { didFromKeys as didFrom, deriveAuthKey, signNonce, verifyPeerBundle, verifySealedSender } from "./identity";
 import { generateMnemonic, mnemonicToSeed, validateMnemonic } from "../identity/did";
 import {
   DbSessionStore, DbIdentityStore, DbPreKeyStore, DbSignedPreKeyStore, DbKyberPreKeyStore,
@@ -120,7 +120,9 @@ export class LibsignalEngine implements CryptoEngine {
       kyberPreKey: toB64(kyberRec.publicKey().serialized),
       kyberPreKeySig: toB64(kyberRec.signature()),
     };
-    await dbSetItem("ls.spkTs", String(Date.now())); // #4 marcaj pt rotația signed prekey-ului
+    const now = String(Date.now());
+    await dbSetItem("ls.spkTs", now);   // #4 marcaj pt rotația signed prekey-ului
+    await dbSetItem("ls.kyberTs", now); // A3 marcaj pt rotația kyber prekey-ului
   }
 
   /**
@@ -163,6 +165,22 @@ export class LibsignalEngine implements CryptoEngine {
         this.bundlePub.signedPreKeySig = toB64(spkSig);
       }
       await dbSetItem("ls.spkTs", String(Date.now()));
+    } catch {}
+  }
+
+  /** A3 — rotește kyber prekey-ul dacă e mai vechi de SPK_MAX_AGE (geamăn cu signed prekey-ul).
+   *  KYBER_PREKEY_ID rămâne 1 (un singur kyber activ, rotit pe loc); re-publică bundle-ul. */
+  private async rotateKyberPreKeyIfStale(): Promise<void> {
+    try {
+      const ts = Number((await dbGetItem("ls.kyberTs")) || "0");
+      if (Date.now() - ts < SPK_MAX_AGE || !this.idKey) return;
+      const kyberRec = KyberPreKeyRecord.new(KYBER_PREKEY_ID, Date.now(), this.idKey.serialized);
+      await this.kyberStore.saveKyberPreKey(KYBER_PREKEY_ID, kyberRec);
+      if (this.bundlePub) {
+        this.bundlePub.kyberPreKey = toB64(kyberRec.publicKey().serialized);
+        this.bundlePub.kyberPreKeySig = toB64(kyberRec.signature());
+      }
+      await dbSetItem("ls.kyberTs", String(Date.now()));
     } catch {}
   }
 
@@ -218,6 +236,7 @@ export class LibsignalEngine implements CryptoEngine {
       };
     } catch { await this.genPrekeys(); }
     await this.rotateSignedPreKeyIfStale(); // #4 rotește signed prekey-ul dacă e vechi
+    await this.rotateKyberPreKeyIfStale();  // A3 rotește kyber prekey-ul dacă e vechi
     await this.replenishOpks(); // #4 batch nou de one-time prekey-uri la fiecare pornire
     return identity;
   }
@@ -238,7 +257,10 @@ export class LibsignalEngine implements CryptoEngine {
       kyberPreKeyId: KYBER_PREKEY_ID, kyberPreKey: this.bundlePub.kyberPreKey, kyberPreKeySig: this.bundlePub.kyberPreKeySig,
       authPub: toB64(this.authPub!), // intră în preimaginea DID-ului → binding verificabil de peer + releu
     });
-    return { ikPub: toB64(idPub.serialized), edPub: "", spkPub: "", spkSig: "", ls };
+    // A1: semnează `ls` canonic cu authPriv → leagă TOT bundle-ul (kyber, signedPreKey...) de
+    // authPub. Peer-ul verifică lsSig la startOutbound; un releu nu poate șterge/altera câmpuri.
+    const lsSig = toB64(signNonce(this.authPriv!, ls));
+    return { ikPub: toB64(idPub.serialized), edPub: "", spkPub: "", spkSig: "", ls, lsSig };
   }
 
   async startOutbound(peerDid: string, bundle: SerializedBundle): Promise<SessionInfo> {
@@ -247,14 +269,12 @@ export class LibsignalEngine implements CryptoEngine {
     // lui publice. NOTĂ: getBundle de mai sus trebuie extins să includă prekey/signed/kyber
     // publice ale emitentului (vezi TODO device-test). Folosim createAndProcessPreKeyBundle.
     const b = JSON.parse(bundle.ls) as any;
-    // BINDING ANTI-MITM (C2): DID-ul e sha256(idKey) (vezi didFrom). Verifică că bundle-ul
-    // livrat de releu chiar aparține DID-ului cerut — altfel un releu compromis poate
-    // substitui cheia și face MITM la primul contact, deși ai scanat DID-ul corect.
-    if (!b.authPub) throw new Error("Bundle fără authPub (client incompatibil) — re-pair necesar");
+    // BINDING ANTI-MITM (C2) + A1: verifică într-un singur loc (a) authPub prezent,
+    // (b) DID = didFrom(idKey,authPub) === peerDid, (c) lsSig valid peste `ls` (leagă TOT
+    // bundle-ul, kyber inclus, de authPub → releul nu poate șterge/altera câmpuri), (d) kyber
+    // prezent (fail-closed PQXDH). Decizia #0 A: lsSig lipsă = warn (impus în N+1 → strict:true).
+    verifyPeerBundle(peerDid, bundle.ls, bundle.lsSig, { strict: false });
     const peerIdPub = PublicKey._fromSerialized(fromB64(b.idKey));
-    if (didFrom(peerIdPub.serialized, fromB64(b.authPub)) !== peerDid) {
-      throw new Error("Bundle: cheile nu corespund DID-ului scanat (posibil MITM releu)");
-    }
     // #4: folosește one-time prekey-ul POPat de releu (unic pt acest contact); fallback la
     // prekey-ul last-resort din bundle (reutilizabil) când poolul peer-ului e gol.
     const opkId = bundle.opk?.pub ? bundle.opk.id : (b.preKeyId ?? PREKEY_ID);
@@ -335,7 +355,9 @@ export class LibsignalEngine implements CryptoEngine {
     const eph = PrivateKey.generate();
     const shared = eph.agree(peerPub); // ECDH X25519 NATIV
     const sd = this.identity?.did ?? didFrom(this.ensureKey().getPublicKey().serialized, this.authPub!);
-    const blob = sealBox(shared, eph.getPublicKey().serialized, { sd, t: inner.type(), c: toB64(inner.serialized) });
+    // A2: `ap` = authPub-ul expeditorului → receptorul verifică didFrom(cheia reală, ap) === sd
+    // la mesajele PreKey, blocând otrăvirea identity-store cu un `sd` forjat.
+    const blob = sealBox(shared, eph.getPublicKey().serialized, { sd, ap: toB64(this.authPub!), t: inner.type(), c: toB64(inner.serialized) });
     this.known.add(peerDid);
     return { toDid: peerDid, sealed: toB64(blob), ts: Date.now() };
   }
@@ -350,10 +372,31 @@ export class LibsignalEngine implements CryptoEngine {
     const body = fromB64(payload.c);
     let pt: Uint8Array;
     if (payload.t === CiphertextMessageType.PreKey) {
+      // A2: un mesaj PreKey CREEAZĂ sesiunea + scrie cheia expeditorului în idStore sub `fromDid`.
+      // `PreKeySignalMessage` nu expune identityKey înainte de decriptare → snapshot + verificare
+      // POST-decriptare + rollback la nepotrivire (nu lăsăm identity-store otrăvit).
+      const prevId = await this.ident().getIdentity(addr);
+      const prevSess = await this.sessionStore.getSession(addr);
       pt = await signalDecryptPreKey(
         PreKeySignalMessage._fromSerialized(body), addr,
         this.sessionStore, this.ident(), this.preKeyStore, this.signedPreKeyStore, this.kyberStore, [KYBER_PREKEY_ID],
       );
+      if (payload.ap) {
+        try {
+          const realId = await this.ident().getIdentity(addr);
+          if (!realId) throw new Error("Plic sealed: fără cheie de identitate după decriptare");
+          verifySealedSender(realId.serialized, fromB64(payload.ap), fromDid); // aruncă la impersonare
+        } catch (e) {
+          // rollback: readu identity-store + sesiunea la starea de dinainte (OPK-ul consumat NU
+          // se restaurează — burn minor, mărginit de rate-limit-ul B1; nu e o gaură de securitate)
+          await this.ident().restoreIdentity(addr, prevId);
+          await this.sessionStore.restoreSession(addr, prevSess);
+          this.known.delete(fromDid);
+          throw e;
+        }
+      } else {
+        console.warn("[Blink] plic sealed fără authPub (ap) — acceptat temporar (Decizia #0 A); impus în N+1");
+      }
     } else {
       pt = await signalDecrypt(SignalMessage._fromSerialized(body), addr, this.sessionStore, this.ident());
     }

@@ -24,7 +24,7 @@ Fluxul complet (handshake → mesaje text/media/voce → bife → persistență 
 | **libsignal** real: X3DH + Double Ratchet + **PQXDH/Kyber** post-quantum | Apeluri audio/video **WebRTC** (cod prezent, netestat fizic) |
 | Sealed sender (releul nu vede expeditorul) | Grupuri **MLS** |
 | Releu Cloudflare orb + auth challenge-response (Ed25519) | **Desktop** (Electron) — parcat, fără libsignal nativ |
-| At-rest criptat: SQLite + ChaCha20-Poly1305, chei în Android Keystore | **iOS** (necesită cont Apple + tuning CocoaPods) |
+| At-rest (Android): SQLite cu **conținut criptat per-mesaj** (ChaCha20-Poly1305), chei în Keystore; SQLCipher pe tot fișierul = planificat | **iOS** (necesită cont Apple + tuning CocoaPods) |
 | Identitate DID:key + frază de recuperare BIP39 + safety number anti-MITM | Transport peste **Tor / I2P / Reticulum** |
 | Text, poze, video, fișiere, note vocale; edit/delete; teme; app-lock + parolă per-conv | F-Droid / push fără Google |
 
@@ -54,7 +54,7 @@ src/
   messaging/   relay.ts          # client WS: connect/bundle/session/send/ack/edit
                codec.ts outbox.ts # codec control + fiabilitate livrare (at-least-once)
   storage/     db.ts             # KV criptat (ChaCha20-Poly1305, cheie în SecureStore)
-               messages.ts       # mesaje în SQLite criptat (write-through O(1)/eveniment)
+               messages.ts       # mesaje în SQLite, conținut criptat per-mesaj (write-through O(1)/eveniment)
                secure.ts         # SecureStore (Keystore) + fallback web
   security/    lock.ts           # app-lock + parolă per-conversație
   identity/    did.ts            # DID:key + frază recuperare BIP39 + safety number
@@ -89,7 +89,7 @@ Aliniat cu [`SECURITY.md`](SECURITY.md) (sursa canonică — citește-o pentru d
 - **Identitate fără PII** — cheie pe dispozitiv (DID:key), fără telefon/email. Recuperare BIP39.
 - **Anti-MITM** — safety number (SHA-256 peste ambele chei reale) + verificare QR + alertă la schimbare de cheie + binding DID↔cheie.
 - **Sealed sender** — releul nu vede CINE trimite (doar destinatarul, pentru rutare).
-- **La repaus (Android)** — chei în Keystore, mesaje în SQLite criptat (ChaCha20-Poly1305).
+- **La repaus (Android)** — chei în Keystore; mesaje în SQLite cu conținut criptat per-mesaj (ChaCha20-Poly1305). SQLCipher pe tot fișierul = planificat; timestamp-ul de index rămâne în clar.
 
 **NU protejăm (limitări asumate):**
 - **Metadate de rețea** — releul (Cloudflare) vede **IP, timing, volum**. Sealed sender

@@ -444,4 +444,22 @@ describe("T2 — media incompletă nu blochează textul; transferul mort e aband
     (relay as any).sweepStaleMedia(Date.now() + 1000); // cu mult sub TTL
     expect((relay as any).mediaAsm.size).toBe(1); // încă viu
   });
+
+  it("C2.4 — mh nou peste un transfer în curs (resend) abortează sink-ul vechi → fără fișier corupt", async () => {
+    open();
+    const sinks: any[] = [];
+    mockMedia.createMediaSink.mockImplementation(() => {
+      const s = { writeChunk: jest.fn(), finish: jest.fn(() => "file://x"), abort: jest.fn() };
+      sinks.push(s);
+      return s;
+    });
+    // transfer în curs: antet + o bucată scrisă în sink-ul #0
+    await deliver({ k: "mh", id: "dup1", n: 3, meta: { kind: "image", name: "p.jpg" }, _v: 1 });
+    await deliver({ k: "mc", id: "dup1", i: 0, d: "A" });
+    expect(sinks.length).toBe(1);
+    // resend al expeditorului (re-criptat → ciphertext diferit, NU dedupat): al doilea mh pt ACELAȘI id
+    await deliver({ k: "mh", id: "dup1", n: 3, meta: { kind: "image", name: "p.jpg" }, _v: 2 });
+    expect(sinks[0].abort).toHaveBeenCalledTimes(1); // sink-ul vechi ÎNCHIS/ȘTERS înainte de-al doilea
+    expect(sinks.length).toBe(2);                     // sink nou pt transferul reluat
+  });
 });

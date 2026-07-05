@@ -6,17 +6,17 @@
  */
 import { aeadDecrypt, aeadEncrypt, concat, fromB64, rand, toB64 } from "../crypto/signal/primitives";
 
-// UTF-8 corect (inclusiv emoji / surrogate pairs) — primitives.utf8 acoperă doar 3 octeți.
+// UTF-8 corect (inclusiv emoji / surrogate pairs) prin TextEncoder/TextDecoder (D3).
+// Pt UTF-8 valid = EXACT aceiași octeți ca vechiul unescape(encodeURIComponent(...)) →
+// valorile KV / rândurile SQLite scrise ÎNAINTE se decriptează identic după schimbare
+// (dovadă: __tests__/codecCompat.test.ts). ignoreBOM:true păstrează un U+FEFF de la început.
+const _te = new TextEncoder();
+const _td = new TextDecoder("utf-8", { ignoreBOM: true });
 export function strToBytes(s: string): Uint8Array {
-  const bin = unescape(encodeURIComponent(s));
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
+  return _te.encode(s);
 }
 export function bytesToStr(b: Uint8Array): string {
-  let bin = "";
-  for (let i = 0; i < b.length; i++) bin += String.fromCharCode(b[i]);
-  return decodeURIComponent(escape(bin));
+  return _td.decode(b);
 }
 
 /** Criptează un string cu cheia dată → base64(nonce ‖ ct). Nonce aleator la fiecare apel. */

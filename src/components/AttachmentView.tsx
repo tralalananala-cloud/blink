@@ -81,6 +81,8 @@ function VideoAttachment({ uri }: { uri: string }) {
 function VoicePlayer({ att, mine }: { att: Attachment; mine: boolean }) {
   const { colors } = useTheme();
   const [playing, setPlaying] = useState(false);
+  const [loading, setLoading] = useState(false); // cât se face createAsync (poate dura pe fișier proaspăt)
+  const [error, setError] = useState(false);     // redarea a eșuat → feedback vizibil, nu buton mort
   const soundRef = useRef<Audio.Sound | null>(null);
   const fg = mine ? colors.bubbleMineText : colors.bubbleTheirsText;
 
@@ -92,27 +94,55 @@ function VoicePlayer({ att, mine }: { att: Attachment; mine: boolean }) {
     return 6 + ((h >> 8) % 18);
   });
 
-  useEffect(() => () => { soundRef.current?.unloadAsync(); }, []);
+  useEffect(() => () => { soundRef.current?.unloadAsync(); soundRef.current = null; }, []);
 
   async function toggle() {
+    if (loading) return; // V: guard anti-dublu-tap — nu porni o a doua redare cât se încarcă
+    setError(false);
     try {
       await setPlaybackAudioMode(); // sunet garantat (silent mode / post-recording)
       if (!soundRef.current) {
-        const { sound } = await Audio.Sound.createAsync({ uri: att.uri }, { volume: 1.0, isLooping: false, shouldPlay: false });
+        setLoading(true);
+        const { sound } = await Audio.Sound.createAsync(
+          { uri: att.uri },
+          { volume: 1.0, isLooping: false, shouldPlay: false },
+        );
         soundRef.current = sound;
         sound.setOnPlaybackStatusUpdate((st: any) => {
-          if (st.didJustFinish) { setPlaying(false); sound.setPositionAsync(0); }
+          if (!st.isLoaded) {
+            // eroare de descărcare/decodare raportată de expo-av → NU o înghiți
+            if (st.error) { console.warn("[Blink] voice playback error:", st.error); setError(true); setPlaying(false); }
+            return;
+          }
+          // V: o singură dată + stop la final. isLooping:false + la didJustFinish oprim EXPLICIT
+          // (pauseAsync, nu doar reset) și readucem poziția la 0 → butonul revine curat la ▶ și
+          // următorul tap pornește o singură redare de la început.
+          if (st.didJustFinish) {
+            setPlaying(false);
+            soundRef.current?.pauseAsync().catch(() => {});
+            soundRef.current?.setPositionAsync(0).catch(() => {});
+          }
         });
+        setLoading(false);
       }
       if (playing) { await soundRef.current.pauseAsync(); setPlaying(false); }
       else { await soundRef.current.playAsync(); setPlaying(true); }
-    } catch { /* demo */ }
+    } catch (e) {
+      // V: tratare reală (nu `catch { /* demo */ }`) — log + stare de eroare vizibilă în UI
+      console.warn("[Blink] voice message failed:", e);
+      setError(true); setLoading(false); setPlaying(false);
+    }
   }
 
+  const glyph = loading ? "…" : error ? "!" : playing ? "⏸" : "▶";
   return (
     <View style={styles.voice}>
-      <Pressable onPress={toggle} style={[styles.playBtn, { backgroundColor: mine ? colors.bubbleMineText : colors.primary }]}>
-        <Text style={{ color: mine ? colors.bubbleMine : colors.onPrimary, fontSize: 14 }}>{playing ? "⏸" : "▶"}</Text>
+      <Pressable
+        onPress={toggle}
+        accessibilityLabel={error ? "Redare vocală eșuată, reîncearcă" : playing ? "Pauză" : "Redă mesajul vocal"}
+        style={[styles.playBtn, { backgroundColor: error ? colors.danger : mine ? colors.bubbleMineText : colors.primary }]}
+      >
+        <Text style={{ color: error ? colors.onPrimary : mine ? colors.bubbleMine : colors.onPrimary, fontSize: 14 }}>{glyph}</Text>
       </Pressable>
       <View style={styles.wave}>
         {bars.map((bh, i) => (

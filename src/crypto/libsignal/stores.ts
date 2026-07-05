@@ -34,6 +34,11 @@ export class DbSessionStore extends SessionStore {
     for (const a of addresses) { const s = await this.getSession(a); if (s) out.push(s); }
     return out;
   }
+  /** A2 rollback: readuce sesiunea la un snapshot anterior (sau o șterge dacă nu exista). */
+  async restoreSession(name: ProtocolAddress, prev: SessionRecord | null): Promise<void> {
+    if (prev) await put("sess." + addrKey(name), prev.serialized);
+    else await dbRemoveItem(P + "sess." + addrKey(name));
+  }
 }
 
 export class DbIdentityStore extends IdentityKeyStore {
@@ -54,6 +59,12 @@ export class DbIdentityStore extends IdentityKeyStore {
   async isTrustedIdentity(name: ProtocolAddress, key: PublicKey, _dir: Direction): Promise<boolean> {
     const known = await this.getIdentity(name);
     return known == null || toB64(known.serialized) === toB64(key.serialized);
+  }
+  /** A2 rollback: readuce identitatea la un snapshot anterior (sau o șterge dacă nu exista) —
+   *  anulează scrierea făcută de un mesaj PreKey sealed cu `sd` forjat (anti-otrăvire TOFU). */
+  async restoreIdentity(name: ProtocolAddress, prev: PublicKey | null): Promise<void> {
+    if (prev) await put("id." + addrKey(name), prev.serialized);
+    else await dbRemoveItem(P + "id." + addrKey(name));
   }
 }
 

@@ -9,11 +9,12 @@
 - **Identitate fără PII** — cheie pe dispozitiv (DID:key), fără număr de telefon/email. Frază de recuperare BIP39.
 - **Anti-MITM** — safety number (SHA-256 peste ambele chei reale) + verificare QR + alertă la schimbarea cheii.
 - **Sealed sender** — releul nu vede CINE trimite (doar destinatarul, pentru rutare).
-- **La repaus (Android)** — chei în Keystore (`WHEN_UNLOCKED_THIS_DEVICE_ONLY`), mesaje în SQLite criptat (ChaCha20-Poly1305).
+- **La repaus (Android)** — chei în Keystore (`WHEN_UNLOCKED_THIS_DEVICE_ONLY`); mesaje în SQLite cu **conținut criptat per-mesaj** (ChaCha20-Poly1305). Criptarea SQLCipher pe **tot fișierul** = planificată; metadatele de index (timestamp) rămân în clar. Pe web/desktop: storage local criptat, nu SQLite.
 - **Pe dispozitiv** — lock app (parolă **scrypt** + biometrie), parolă per-conversație, mesaje care dispar, anti-screenshot, igienă RAM la fundal.
 
 ## Ce NU protejează (limitări asumate)
 - **Metadate de rețea** — releul (Cloudflare) vede **IP-ul, timing-ul și volumul** tău. Sealed sender ascunde DID-ul expeditorului, NU calea de rețea. Tor = pe roadmap.
+- **Push (FCM)** — cu notificări active (app închis), releul stochează maparea **DID→token FCM**; Google (FCM) vede **token↔timing**, releul vede **DID↔token**. Conținutul rămâne E2EE (push-ul e doar un semnal „ai un mesaj", fără text). Fără push activat → **zero implicare Google**.
 - **Impersonare pe contacte NEVERIFICATE (sealed sender)** — plicul sealed nu autentifică criptografic expeditorul la nivel **exterior** (`sd` e auto-declarat). Autenticitatea reală vine din **interior**: mesajul libsignal se decriptează DOAR sub sesiunea lui `sd`, deci un `sd` fals eșuează la decriptare. În plus, de la auditul 2026-06-24 **DID-ul = sha256(idKey ‖ authPub)** și e verificat la stabilirea sesiunii + la releu → un releu **nu mai poate substitui cheia** (MITM la primul contact e blocat criptografic, nu doar prin safety number). Reziduu: pe un contact pe care nu l-ai adăugat niciodată, tot verifici safety number-ul. [audit #2/#6]
 - **Dispozitiv compromis** — root/malware/keylogger înfrânge orice messenger. Protejăm conținutul, nu un OS ostil.
 - **Desktop (Electron) la repaus** — pe desktop secretele stau în `localStorage` (necriptat de OS) → criptarea „at rest" e slabă fără full-disk encryption. Android e calea sigură; desktopul e parcat. [audit #3]

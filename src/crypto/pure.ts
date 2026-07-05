@@ -11,17 +11,17 @@ import {
   toB64, fromB64, hash, hkdfBytes, aeadEncrypt, aeadDecrypt, rand, concat, utf8, fromUtf8,
 } from "./signal/primitives";
 
-// UTF-8 corect (emoji) fără a depinde de TextEncoder (absent în unele runtime-uri).
+// UTF-8 corect (emoji) prin TextEncoder/TextDecoder (Hermes modern + Node le au; D3).
+// Pt UTF-8 valid produc EXACT aceiași octeți ca vechiul unescape(encodeURIComponent(...)) →
+// mesajele criptate ÎNAINTE se decriptează identic (dovadă: __tests__/codecCompat.test.ts).
+// ignoreBOM:true = NU decupa un U+FEFF de la început (vechiul cod îl păstra) → byte-identic.
+const _te = new TextEncoder();
+const _td = new TextDecoder("utf-8", { ignoreBOM: true });
 export function enc(s: string): Uint8Array {
-  const bin = unescape(encodeURIComponent(s));
-  const b = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
-  return b;
+  return _te.encode(s);
 }
 export function dec(b: Uint8Array): string {
-  let bin = "";
-  for (let i = 0; i < b.length; i++) bin += String.fromCharCode(b[i]);
-  return decodeURIComponent(escape(bin));
+  return _td.decode(b);
 }
 
 /**
@@ -45,8 +45,10 @@ export function safetyDigits(a: Uint8Array, b: Uint8Array): string {
 // myKey.agree(ephPub)); aici doar derivăm cheia + AEAD + framing.
 const SEALED_INFO = "blink-sealed-v1";
 
-/** Conținutul interior al plicului: did expeditor + tipul + mesajul libsignal (base64). */
-export interface SealedPayload { sd: string; t: number; c: string }
+/** Conținutul interior al plicului: did expeditor + authPub (A2) + tipul + mesajul libsignal (base64).
+ *  `ap` = cheia de auth a expeditorului; leagă `sd` de cheia reală → blochează impersonarea TOFU
+ *  la mesajele PreKey. Opțional pt compat (Decizia #0 A: warn dacă lipsește, impus în N+1). */
+export interface SealedPayload { sd: string; ap?: string; t: number; c: string }
 
 /** Sigilează payload-ul către un secret partajat dat → octeții blob-ului (apelantul îi face base64). */
 export function sealBox(shared: Uint8Array, ephPub: Uint8Array, payload: SealedPayload): Uint8Array {

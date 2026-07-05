@@ -25,12 +25,18 @@
 import { verifyReg } from "./auth.mjs"; // AUTH RELEU (C1) — helperi puri, testați (test/auth.test.mjs)
 import { enqueue, pruneFresh, removeAcked, MAX_QUEUE, TTL } from "./queue.mjs"; // COADĂ at-least-once — pur, testat (test/queue.test.mjs)
 import { buildServiceJwt, buildPushMessage, shouldPush } from "./push.mjs"; // PUSH FCM — helperi puri, testați (test/push.test.mjs, test/push_collapse.test.mjs)
+import { bucketHit } from "./ratelimit.mjs"; // token-bucket pur, testat (test/ratelimit.test.mjs)
 
 const shardName = (did) => "shard:" + did;
 // #5 anti-abuz: rate-limit/dest (anti-flood). Generos, ca să nu afecteze conversațiile
 // normale; oprește doar inundațiile de spam. (Plafonul cozii MAX_QUEUE e în queue.mjs.)
 const RL_MAX = 240;        // mesaje
 const RL_WINDOW = 60_000;  // pe minut, per destinatar
+// #B1 anti-drenare pool OPK: getbundle e anonim (sealed sender), dar fără limită cineva care-ți
+// știe DID-ul îți POPează tot poolul de one-time prekey-uri în câteva secunde → contactele noi
+// cad pe prekey-ul last-resort (reutilizabil) = forward secrecy mai slabă. Limită per DID cerut.
+const OPK_RL_MAX = 30;            // POP-uri de one-time prekey
+const OPK_RL_WINDOW = 3_600_000;  // pe oră, per DID cerut
 
 export class Relay {
   constructor(state, env) {
@@ -40,6 +46,7 @@ export class Relay {
     this.fcmAt = null;
     this.fcmAtExp = 0;
     this.rl = new Map(); // #5 rate-limit per destinatar (in-memory pe shard)
+    this.opkRl = new Map(); // #B1 rate-limit POP-uri OPK per DID cerut (in-memory pe shard)
   }
 
   // #5 — true dacă `to` a depășit pragul de mesaje în fereastra de timp (anti-flood).
@@ -111,8 +118,18 @@ export class Relay {
     } catch { return false; }
   }
 
+  // #B1 — true dacă poolul lui `did` a fost POPat de prea multe ori în fereastră (anti-drenare).
+  opkRateLimited(did) {
+    const r = bucketHit(this.opkRl.get(did), Date.now(), OPK_RL_MAX, OPK_RL_WINDOW);
+    this.opkRl.set(did, r.hist);
+    return r.limited;
+  }
+
   // #4 — POPează un one-time prekey din poolul lui `did` (consumat: fiecare contact ia altul).
   async popOpkLocal(did) {
+    // #B1: peste prag → NU POP (întoarce null) → clientul cade pe last-resort, nu eroare.
+    // Contactele oneste (câteva/oră) nu ating pragul; drenarea în masă e oprită.
+    if (this.opkRateLimited(did)) return null;
     const list = (await this.storage.get("opks:" + did)) || [];
     if (!list.length) return null;
     const opk = list.shift();

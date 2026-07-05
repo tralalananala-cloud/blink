@@ -1,8 +1,8 @@
 {
-  "name": "cipher",
+  "name": "blink",
   "version": "1.2.2",
   "private": true,
-  "description": "Cipher — messenger E2EE descentralizat (Android, Expo). Faza UI + arhitectura; crypto/transport mockate in spatele interfetelor reale.",
+  "description": "Blink — messenger E2EE descentralizat (Android, Expo). Cripto reală: libsignal PQXDH + Double Ratchet (post-quantum), sealed sender; releu Cloudflare Worker cu auth challenge-response.",
   "main": "expo-router/entry",
   "overrides": {
     "react-native-quick-base64": "2.2.2"

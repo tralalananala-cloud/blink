@@ -1,0 +1,41 @@
+name: CI
+
+# D1 — rulează pe repo-ul public (sincronizat prin scripts/publish-source.sh).
+# Cel mai bun raport efort/valoare: typecheck + teste unitare la fiecare push/PR.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  app:
+    name: App — tsc + jest (Node 20)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # legacy-peer-deps: react-native-webrtc are un peer expo mai vechi (vezi .npmrc).
+      - name: Install
+        run: npm install --legacy-peer-deps --no-audit --no-fund
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Unit tests
+        run: npx jest --ci
+
+  relay-worker:
+    name: Relay worker — node --test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: relay/cf-worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # Testele worker-ului sunt pure (node:test + src/*.mjs), fără dependențe externe.
+      - name: Worker tests
+        run: node --test test/*.test.mjs
