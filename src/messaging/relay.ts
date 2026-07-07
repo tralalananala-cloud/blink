@@ -17,12 +17,14 @@ import { createMediaSink, MediaSink, streamFileChunks, writeMedia } from "../med
 import { callManager } from "../calls/webrtc";
 import { reticulum } from "./reticulum";
 import { toB64, fromB64, utf8, fromUtf8, hash } from "../crypto/signal/primitives";
-import { ctl, parseControl } from "./codec"; // codec de control E2E (Faza 3.2) — pur, testat
+import { AckKind, ctl, parseControl } from "./codec"; // codec de control E2E (Faza 3.2) — pur, testat
 import { Outbox } from "./outbox"; // fiabilitatea livrării (Faza 3.2) — outbox/pendingAck/sweep
 
 type IncomingCb = (fromDid: string, plaintext: string, remoteId?: string, senderName?: string) => void;
 // M4 — sink = scriere streaming în fișier (nativ); parts = asamblare legacy în RAM (web/fallback)
-type MediaAsm = { meta: any; n: number; parts: string[] | null; got: number; sink: MediaSink | null; seen: Set<number>; lastAt: number };
+type MediaAsm = { meta: any; n: number; parts: string[] | null; got: number; sink: MediaSink | null; seen: Set<number>; lastAt: number; gid?: string };
+// Cârlige injectate de messaging/group.ts (fan-out grupuri) — evită importul circular relay↔group.
+type GroupHooks = { onAck: (fromDid: string, id: string, s: AckKind) => void; onReady: () => void; onReset: () => void };
 
 // T2 — un transfer media la care nu mai vine nicio bucată timp de atât e ABANDONAT curat
 // (nu îngheață o intrare pe viață în RAM/fișier). Nu blochează textul: fiecare plic e tratat
@@ -79,6 +81,9 @@ class Relay {
   }
   // Expune coada de confirmări a outbox-ului (testele 1.3 inspectează `relay.pendingAck`).
   private get pendingAck() { return this.outboxMgr.pendingAck; }
+
+  private groupHooks: GroupHooks | null = null;
+  setGroupHooks(h: GroupHooks) { this.groupHooks = h; }
 
   setUrl(u: string) { this.url = u; }
   isConnected() { return this.connected; }
@@ -188,6 +193,7 @@ class Relay {
     this.sendPush();
     this.outboxMgr.startSweep();
     this.outboxMgr.flush();
+    this.groupHooks?.onReady(); // grupuri: pornește sweep-ul + golește coada offline de fan-out
     if (RETICULUM_GATEWAY && did) {
       reticulum.register(did).then((addr) => {
         if (addr) reticulum.startPolling((blob) => { try { this.handle(fromUtf8(fromB64(blob))); } catch {} });
@@ -241,6 +247,7 @@ class Relay {
     if (this.retry) { clearTimeout(this.retry); this.retry = null; }
     this.stopPing();
     this.outboxMgr.clear();
+    this.groupHooks?.onReset(); // grupuri: golește cozile de fan-out + progresul bifelor
     try { this.ws?.close(); } catch {}
     this.ws = null;
     this.connected = false;
@@ -298,6 +305,7 @@ class Relay {
           case "a": // confirmare (bifă): urcă starea mesajului propriu
             useApp.getState().markMsgStatus(env.fromDid, c.id, c.s);
             this.outboxMgr.onDelivered(c.id); // confirmat → nu mai retrimite
+            this.groupHooks?.onAck(env.fromDid, c.id, c.s); // grupuri: agregă bifele per membru
             return;
           case "e": // editare de la peer
             useApp.getState().applyRemoteEdit(env.fromDid, c.id, c.b);
@@ -320,7 +328,7 @@ class Relay {
             this.mediaAsm.get(key)?.sink?.abort();
             const sink = createMediaSink(c.id, c.meta.kind, c.meta.name);
             this.mediaAsm.set(key, {
-              meta: c.meta, n: c.n, got: 0, sink, parts: sink ? null : new Array(c.n), seen: new Set(), lastAt: Date.now(),
+              meta: c.meta, n: c.n, got: 0, sink, parts: sink ? null : new Array(c.n), seen: new Set(), lastAt: Date.now(), gid: c.gid,
             });
             return;
           }
@@ -340,12 +348,21 @@ class Relay {
               try {
                 const uri = a.sink ? a.sink.finish() : await writeMedia(c.id, a.meta.kind, a.meta.name, a.parts!.join(""));
                 const att: Attachment = { kind: a.meta.kind, uri, name: a.meta.name, size: a.meta.size, durationMs: a.meta.dur, width: a.meta.w, height: a.meta.h };
-                useApp.getState().receiveMessage(env.fromDid, "", c.id, att, a.meta.n);
+                if (a.gid) useApp.getState().receiveGroupMessage(env.fromDid, a.gid, "", c.id, att, a.meta.n);
+                else useApp.getState().receiveMessage(env.fromDid, "", c.id, att, a.meta.n);
                 this.sendAck(env.fromDid, c.id, "delivered");
               } catch { a.sink?.abort(); /* asamblare eșuată — renunță */ }
             }
             return;
           }
+          case "gt": { // text de grup (fan-out pairwise): conversația e pe gid, expeditorul pe plic
+            useApp.getState().receiveGroupMessage(env.fromDid, c.gid, c.b, c.id, undefined, c.n, c.gname);
+            this.sendAck(env.fromDid, c.id, "delivered");
+            return;
+          }
+          case "gc": // membership de grup (create/add/remove/leave) — gărzile de admin în store
+            useApp.getState().applyGroupCtl(env.fromDid, c);
+            return;
           case "t":
           case "raw": { // mesaj text (sau fallback de la un peer vechi, fără înveliș)
             const body = c.k === "t" ? (c.b ?? "") : c.b;
@@ -439,8 +456,26 @@ class Relay {
     await this.transmit(peerDid, env);
   }
 
+  /**
+   * Trimite UN plic de grup (gt) către UN membru — fan-out-ul, cozile per membru și bifele
+   * agregate le face messaging/group.ts. Fără outbox aici: tracking-ul 1:1 (pendingAck pe
+   * msgId) s-ar suprascrie între membri (același msgId pt toți).
+   */
+  async sendGroupOne(peerDid: string, g: { gid: string; gname?: string; text: string }, msgId: string): Promise<{ ok: boolean; reason?: string }> {
+    if (!this.connected) return { ok: false, reason: "offline" };
+    if (!(await this.ensureSession(peerDid))) return { ok: false, reason: "no-bundle" };
+    try {
+      const env = await this.encryptFor(peerDid, JSON.stringify(ctl.groupText(g.gid, msgId, g.text, myName(), g.gname)));
+      await this.transmit(peerDid, env);
+      return { ok: true };
+    } catch { return { ok: false, reason: "send-failed" }; }
+  }
+
+  /** Control de grup (gc, obiect din ctl.groupCtl) către un membru — best effort, ca edit/delete. */
+  sendGroupCtl(peerDid: string, gcObj: any) { return this.sendControl(peerDid, gcObj); }
+
   /** Trimite un atașament criptat E2E pe bucăți, STREAMING (M4 — fără tot fișierul în RAM). */
-  async sendMedia(peerDid: string, att: Attachment, msgId: string): Promise<{ ok: boolean; reason?: string }> {
+  async sendMedia(peerDid: string, att: Attachment, msgId: string, gid?: string): Promise<{ ok: boolean; reason?: string }> {
     if (!this.connected) { this.outboxMgr.queueOut({ to: peerDid, kind: "media", att, id: msgId }); return { ok: true, reason: "queued" }; }
     if (!(await this.ensureSession(peerDid))) return { ok: false, reason: "no-bundle" };
     let mhSent = false;
@@ -448,7 +483,7 @@ class Relay {
       const res = await streamFileChunks(att.uri, async (b64, i, total) => {
         if (!mhSent) {
           const meta = { kind: att.kind, name: att.name, dur: att.durationMs, w: att.width, h: att.height, size: att.size, n: myName() };
-          await this.sendCtl(peerDid, ctl.mediaHeader(msgId, total, meta));
+          await this.sendCtl(peerDid, ctl.mediaHeader(msgId, total, meta, gid));
           mhSent = true;
         }
         await this.sendCtl(peerDid, ctl.mediaChunk(msgId, i, b64));

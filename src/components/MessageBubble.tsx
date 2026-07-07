@@ -69,6 +69,10 @@ function MessageBubbleImpl({ msg, onLongPress }: { msg: Message; onLongPress?: (
         {gradient ? (
           <LinearGradient colors={gradient as [string, string, ...string[]]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
         ) : null}
+        {/* grupuri: cine a trimis (mesajele 1:1 primite nu au senderName) */}
+        {!mine && msg.senderName && !bare ? (
+          <Text style={[styles.sender, { color: colors.accent }]} numberOfLines={1}>{msg.senderName}</Text>
+        ) : null}
         {att ? <View style={msg.text ? { marginBottom: 6 } : null}><AttachmentView att={att} mine={mine} /></View> : null}
         {msg.text ? <Text style={[styles.text, { color: fg }]}>{msg.text}</Text> : null}
         {!bare ? (
@@ -95,6 +99,7 @@ const styles = StyleSheet.create({
   mine: { borderBottomRightRadius: radius.sm },
   theirs: { borderBottomLeftRadius: radius.sm },
   text: { fontFamily: fonts.body, fontSize: 15, lineHeight: 21 },
+  sender: { fontFamily: fonts.bodySemibold, fontSize: 12, marginBottom: 2 },
   meta: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 4, marginTop: 2 },
   time: { fontFamily: fonts.mono, fontSize: 10 },
   tick: { fontFamily: fonts.mono, fontSize: 10 },

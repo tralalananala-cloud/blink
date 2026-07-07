@@ -18,9 +18,12 @@ type Props = {
   onToggleLock: () => void;
   onSetBurn: (ms: number | undefined) => void;
   onDeleteBoth: () => void;
+  /** Grup: arată rândul „Membri" și ascunde „Șterge la ambii" (dc e protocol 1:1). */
+  isGroup?: boolean;
+  onMembers?: () => void;
 };
 
-export function ConvOptionsSheet({ visible, locked, burnAfterReadMs, insetsBottom, onClose, onToggleLock, onSetBurn, onDeleteBoth }: Props) {
+export function ConvOptionsSheet({ visible, locked, burnAfterReadMs, insetsBottom, onClose, onToggleLock, onSetBurn, onDeleteBoth, isGroup, onMembers }: Props) {
   const { colors } = useTheme();
   const type = useType();
   const { t } = useI18n();
@@ -30,6 +33,17 @@ export function ConvOptionsSheet({ visible, locked, burnAfterReadMs, insetsBotto
         <Pressable style={[styles.optionsSheet, { backgroundColor: colors.bgRaised, borderColor: colors.border, paddingBottom: insetsBottom + space.lg }]} onPress={() => {}}>
           <View style={[styles.grip, { backgroundColor: colors.border }]} />
           <Text style={type.h3}>{t.lock.convOptions}</Text>
+
+          {/* Membri (doar grupuri) */}
+          {isGroup && onMembers ? (
+            <Pressable style={styles.optRow} onPress={onMembers}>
+              <Icon name="people" size={20} color={colors.accent} />
+              <View style={{ flex: 1 }}>
+                <Text style={[type.body]}>{t.friends.membersTitle}</Text>
+                <Text style={type.caption}>{t.friends.groupE2E}</Text>
+              </View>
+            </Pressable>
+          ) : null}
 
           {/* Blocare */}
           <Pressable style={styles.optRow} onPress={onToggleLock}>
@@ -55,15 +69,20 @@ export function ConvOptionsSheet({ visible, locked, burnAfterReadMs, insetsBotto
           </View>
           {burnAfterReadMs ? <Text style={[type.caption, { marginTop: space.sm, color: colors.accent }]}>⏳ {t.lock.burnNote}</Text> : null}
 
-          {/* Șterge conversația la ambii — protocol dc autentificat pe sesiune (T3) */}
-          <View style={[styles.divider, { backgroundColor: colors.border }]} />
-          <Pressable style={styles.optRow} onPress={onDeleteBoth}>
-            <Icon name="trash-outline" size={20} color={colors.danger} />
-            <View style={{ flex: 1 }}>
-              <Text style={[type.body, { color: colors.danger }]}>{t.lock.deleteBoth}</Text>
-              <Text style={type.caption}>{t.lock.deleteBothBody}</Text>
-            </View>
-          </Pressable>
+          {/* Șterge conversația la ambii — protocol dc autentificat pe sesiune (T3). Doar 1:1:
+              la grupuri dc ar șterge conversația 1:1 cu fiecare membru, nu grupul. */}
+          {!isGroup ? (
+            <>
+              <View style={[styles.divider, { backgroundColor: colors.border }]} />
+              <Pressable style={styles.optRow} onPress={onDeleteBoth}>
+                <Icon name="trash-outline" size={20} color={colors.danger} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[type.body, { color: colors.danger }]}>{t.lock.deleteBoth}</Text>
+                  <Text style={type.caption}>{t.lock.deleteBothBody}</Text>
+                </View>
+              </Pressable>
+            </>
+          ) : null}
         </Pressable>
       </Pressable>
     </Modal>

@@ -35,6 +35,7 @@ import { AttachMenu } from "../../src/components/chat/AttachMenu";
 import { Composer } from "../../src/components/chat/Composer";
 import { MessageMenu } from "../../src/components/chat/MessageMenu";
 import { ConvOptionsSheet } from "../../src/components/chat/ConvOptionsSheet";
+import { GroupMembersSheet } from "../../src/components/chat/GroupMembersSheet";
 import { confirmDestructive } from "../../src/ui/confirm";
 import { useChatMessages } from "../../src/components/chat/useChatMessages";
 import { useMediaSend } from "../../src/components/chat/useMediaSend";
@@ -60,6 +61,7 @@ export default function Conversation() {
   const burnSweep = useApp((s) => s.burnSweep);
   const applyRemoteDeleteConv = useApp((s) => s.applyRemoteDeleteConv);
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const [membersOpen, setMembersOpen] = useState(false);
   const [verifyOpen, setVerifyOpen] = useState(false);
   const [lockMode, setLockMode] = useState<null | "set" | "verify">(null);
   const [unlocked, setUnlocked] = useState(true);
@@ -127,6 +129,9 @@ export default function Conversation() {
   }
 
   const hasText = chat.text.trim().length > 0;
+  const myDid = useApp.getState().identity?.did;
+  // Scos/plecat din grup → composer înlocuit cu notă onestă (istoricul rămâne vizibil).
+  const isMember = !conv.group || (!!myDid && (conv.members ?? []).includes(myDid));
   const toggleAttach = () => { setAttach((v) => !v); setEmoji(false); };
   const toggleEmoji = () => { setEmoji((v) => !v); setAttach(false); };
   const toggleConvLock = () => {
@@ -174,8 +179,8 @@ export default function Conversation() {
                 {conv.locked ? <Icon name="lock-closed" size={13} color={colors.textMuted} /> : null}
               </View>
               {conv.group ? (
-                <Text style={[styles.ratchet, { color: colors.warning }]}>
-                  👥 {format(t.friends.membersCount, { n: conv.members?.length ?? 0 })} · demo
+                <Text style={[styles.ratchet, { color: colors.secure }]}>
+                  👥 {format(t.friends.membersCount, { n: conv.members?.length ?? 0 })} · 🔒 E2E
                 </Text>
               ) : conv.burnAfterReadMs ? (
                 <Text style={[styles.ratchet, { color: colors.accent }]}>
@@ -291,6 +296,11 @@ export default function Conversation() {
           ) : null}
 
           {/* Composer — iconițe per familie de temă */}
+          {!isMember ? (
+            <View style={[styles.notMember, { borderTopColor: colors.border, paddingBottom: insets.bottom + space.sm }]}>
+              <Text style={type.bodyMuted}>{t.friends.notMember}</Text>
+            </View>
+          ) : (
           <Composer
             family={family}
             text={chat.text}
@@ -307,6 +317,7 @@ export default function Conversation() {
             onSend={chat.sendText}
             onToggleVoice={media.toggleVoice}
           />
+          )}
 
           {emoji ? <EmojiPicker onPick={(e) => chat.setText((p) => p + e)} /> : null}
         </KeyboardAvoidingView>
@@ -346,7 +357,14 @@ export default function Conversation() {
         onToggleLock={toggleConvLock}
         onSetBurn={(ms) => setBurnTimer(conv.id, ms)}
         onDeleteBoth={onDeleteBoth}
+        isGroup={conv.group}
+        onMembers={() => { setOptionsOpen(false); setMembersOpen(true); }}
       />
+
+      {/* membrii grupului: add/remove (admin) + leave */}
+      {conv.group ? (
+        <GroupMembersSheet visible={membersOpen} gid={conv.id} insetsBottom={insets.bottom} onClose={() => setMembersOpen(false)} />
+      ) : null}
 
       {/* parolă conversație: setare sau verificare */}
       <PasscodeModal
@@ -396,5 +414,6 @@ const styles = StyleSheet.create({
   editText: { flex: 1, fontFamily: fonts.bodyMedium, fontSize: 13 },
   editClose: { fontSize: 14 },
   lockedArea: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: space.xxl },
+  notMember: { alignItems: "center", paddingTop: space.md, paddingHorizontal: space.lg, borderTopWidth: StyleSheet.hairlineWidth },
   unlockBtn: { marginTop: space.xl, paddingHorizontal: space.xxl, height: 48, borderRadius: radius.xl, alignItems: "center", justifyContent: "center" },
 });

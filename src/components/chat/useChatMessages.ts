@@ -7,6 +7,7 @@ import * as Haptics from "expo-haptics";
 import { useApp } from "../../state/store";
 import { engine } from "../../crypto";
 import { relay } from "../../messaging/relay";
+import { sendGroupMedia, sendGroupText } from "../../messaging/group";
 import { SessionInfo } from "../../crypto/types";
 import { Attachment, Conversation, Message } from "../../data/mockData";
 
@@ -30,7 +31,7 @@ export function useChatMessages(conv: Conversation | undefined, deps: Deps) {
     if (!conv) return;
     const id = append(conv.id, plaintext, true, attachment); // afișează imediat
     setTimeout(() => deps.listRef.current?.scrollToEnd({ animated: true }), 60);
-    // trimite prin releu (E2E real). Grupurile = fază ulterioară.
+    // trimite prin releu (E2E real): 1:1 direct, grupuri prin fan-out pairwise (G3).
     if (!conv.group && plaintext.trim()) {
       await relay.sendText(conv.did, plaintext, id);
       if (engine.hasSession(conv.did)) deps.setSession(await engine.getSession(conv.did));
@@ -41,9 +42,11 @@ export function useChatMessages(conv: Conversation | undefined, deps: Deps) {
         markStatus(conv.did, id, "sent"); // rămâne afișat local
         if (res.reason === "too-big") Alert.alert("Fișier prea mare", "Maxim 8 MB prin rețea deocamdată.");
       }
-    } else {
-      // grupuri încă nu trec prin rețea → marchează local ca trimis
-      markStatus(conv.did, id, "sent");
+    } else if (conv.group && plaintext.trim()) {
+      await sendGroupText(conv.id, plaintext, id); // ✓ sent / cozit per membru vin din group.ts
+    } else if (conv.group && attachment) {
+      const res = await sendGroupMedia(conv.id, attachment, id);
+      if (!res.ok) Alert.alert("Neexpediat", "Media în grup cere conexiune la releu. Reîncearcă online.");
     }
   }
 

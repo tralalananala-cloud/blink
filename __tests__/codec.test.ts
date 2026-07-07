@@ -59,3 +59,40 @@ describe("parseControl — gărzi + fallback (ca în handle)", () => {
     expect(parseControl(JSON.stringify({ k: "e", id: "m" }))).toEqual({ k: "e", id: "m", b: "" });
   });
 });
+
+describe("grup (gt/gc + gid pe media) — lot GRUPURI v1", () => {
+  const rt = (o: any) => parseControl(JSON.stringify(o));
+  it("groupText round-trip, cu și fără gname", () => {
+    expect(rt(ctl.groupText("g1", "m1", "salut grup", "Ana", "Gașca")))
+      .toEqual({ k: "gt", gid: "g1", id: "m1", b: "salut grup", n: "Ana", gname: "Gașca" });
+    expect(rt(ctl.groupText("g1", "m2", "iar", "Ana")))
+      .toEqual({ k: "gt", gid: "g1", id: "m2", b: "iar", n: "Ana" });
+  });
+  it("groupCtl round-trip pe fiecare act", () => {
+    expect(rt(ctl.groupCtl("g1", "create", { members: ["didA", "didB"], name: "Gașca" })))
+      .toEqual({ k: "gc", gid: "g1", act: "create", members: ["didA", "didB"], name: "Gașca" });
+    expect(rt(ctl.groupCtl("g1", "add", { members: ["didC"] })))
+      .toEqual({ k: "gc", gid: "g1", act: "add", members: ["didC"] });
+    expect(rt(ctl.groupCtl("g1", "remove", { members: ["didB"] })))
+      .toEqual({ k: "gc", gid: "g1", act: "remove", members: ["didB"] });
+    expect(rt(ctl.groupCtl("g1", "leave"))).toEqual({ k: "gc", gid: "g1", act: "leave" });
+  });
+  it("mediaHeader cu gid round-trip; fără gid rămâne 1:1 (compat)", () => {
+    expect(rt(ctl.mediaHeader("x", 3, { kind: "image" }, "g1")))
+      .toEqual({ k: "mh", id: "x", n: 3, meta: { kind: "image" }, gid: "g1" });
+    expect(rt(ctl.mediaHeader("x", 3, { kind: "image" })).k === "mh" && (rt(ctl.mediaHeader("x", 3, { kind: "image" })) as any).gid).toBeUndefined();
+  });
+  it("gărzi: gt/gc cu câmpuri cheie lipsă sau act necunoscut → raw", () => {
+    expect(parseControl(JSON.stringify({ k: "gt", id: "m", b: "x" })).k).toBe("raw");      // gt fără gid
+    expect(parseControl(JSON.stringify({ k: "gt", gid: "g" })).k).toBe("raw");             // gt fără id
+    expect(parseControl(JSON.stringify({ k: "gc", gid: "g", act: "explode" })).k).toBe("raw"); // act necunoscut
+    expect(parseControl(JSON.stringify({ k: "gc", act: "add" })).k).toBe("raw");           // gc fără gid
+  });
+  it("gc cu members ne-array sau name ne-string → câmpuri ignorate, nu crapă", () => {
+    expect(rt({ k: "gc", gid: "g", act: "add", members: "didC", name: 7 }))
+      .toEqual({ k: "gc", gid: "g", act: "add" });
+  });
+  it("gt cu b lipsă → b gol (ca la edit)", () => {
+    expect(rt({ k: "gt", gid: "g", id: "m" })).toEqual({ k: "gt", gid: "g", id: "m", b: "" });
+  });
+});

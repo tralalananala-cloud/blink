@@ -5,6 +5,7 @@
  */
 import { Identity } from "../crypto/types";
 import { TransportStatus } from "../transport/types";
+import { GroupAct } from "../messaging/codec";
 import { Attachment, Contact, Conversation, MsgStatus } from "../data/mockData";
 import { StateCreator } from "zustand";
 
@@ -37,7 +38,7 @@ export interface ChatSlice {
     text: string,
     fromMe: boolean,
     attachment?: Attachment,
-    meta?: { id?: string; remoteId?: string; status?: MsgStatus },
+    meta?: { id?: string; remoteId?: string; status?: MsgStatus; sender?: string; senderName?: string },
   ) => string;
   /** Urcă starea unui mesaj propriu (bife): sent → delivered → read. */
   markMsgStatus: (peerDid: string, msgId: string, status: MsgStatus) => void;
@@ -68,8 +69,17 @@ export interface ChatSlice {
   openDirect: (contact: Contact) => string;
   /** Mesaj primit prin releu (decriptat): găsește/creează conversația + notificare. */
   receiveMessage: (fromDid: string, text: string, remoteId?: string, attachment?: Attachment, senderName?: string) => void;
-  /** Creează un grup cu membrii dați; întoarce id-ul conversației. */
+  /** Creează un grup cu membrii dați (tu = admin); întoarce gid-ul (= id-ul conversației). */
   createGroup: (name: string, memberDids: string[]) => string;
+  /** Mesaj de grup primit (gt, decriptat): găsește/creează grupul după gid + notificare. */
+  receiveGroupMessage: (
+    fromDid: string, gid: string, text: string,
+    remoteId?: string, attachment?: Attachment, senderName?: string, gname?: string,
+  ) => void;
+  /** Aplică un control de membership (gc) primit: create/add/remove doar de la admin, leave de la oricine. */
+  applyGroupCtl: (fromDid: string, gc: { gid: string; act: GroupAct; members?: string[]; name?: string }) => void;
+  /** Bife pe mesajele proprii de grup (statusul agregat îl calculează stratul de trimitere). */
+  markGroupMsgStatus: (gid: string, msgId: string, status: MsgStatus) => void;
   clearMessagesFromMemory: () => void;
   wipe: () => void;
 }

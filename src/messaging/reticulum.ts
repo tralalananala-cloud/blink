@@ -7,9 +7,13 @@
  * Adresa Reticulum a unui peer se învață din payload-ul mesajelor (câmp `ra`) — fără QR nou.
  */
 import { RETICULUM_GATEWAY } from "../config";
+import { engine } from "../crypto";
 
 class ReticulumTransport {
   myAddr: string | null = null;
+  // token-ul de inbox (persistat server-side per DID, primit la fiecare register) —
+  // fără el gateway-ul refuză /recv, ca să nu poată goli nimeni inbox-ul altcuiva.
+  private token: string | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private onBlob: ((blobB64: string) => void) | null = null;
 
@@ -22,11 +26,24 @@ class ReticulumTransport {
     return r.json();
   }
 
-  /** Înregistrează DID-ul la gateway → primește adresa Reticulum proprie. */
+  /** Înregistrează DID-ul la gateway → adresa Reticulum proprie. Challenge-response (schema
+   *  releului): gateway-ul emite un nonce, îl semnăm cu cheia de auth a DID-ului, gateway-ul
+   *  verifică semnătura + binding-ul DID → nimeni nu poate revendica DID-ul altcuiva. */
   async register(did: string): Promise<string | null> {
     if (!this.on()) return null;
-    try { const j = await this.post("/register", { did }); this.myAddr = j.addr ?? null; return this.myAddr; }
-    catch { return null; }
+    try {
+      const j1 = await this.post("/register", { did });
+      let j = j1;
+      if (j1.nonce) {
+        if (!engine.signChallenge) return null; // motor fără auth (web stub) → fără Reticulum
+        const auth = engine.signChallenge(j1.nonce);
+        const ls = JSON.parse(engine.getBundle().ls ?? "{}");
+        j = await this.post("/register", { did, idKey: ls.idKey, authPub: auth.pub, sig: auth.sig });
+      }
+      this.myAddr = j.addr ?? null;
+      this.token = j.token ?? null;
+      return this.myAddr;
+    } catch { return null; }
   }
 
   /** Trimite un blob opac (plic E2E) către adresa Reticulum a unui peer. */
@@ -45,9 +62,9 @@ class ReticulumTransport {
   stopPolling() { if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; } }
 
   private async poll() {
-    if (!this.on() || !this.myAddr) return;
+    if (!this.on() || !this.myAddr || !this.token) return;
     try {
-      const r = await fetch(`${RETICULUM_GATEWAY}/recv?addr=${encodeURIComponent(this.myAddr)}`);
+      const r = await fetch(`${RETICULUM_GATEWAY}/recv?addr=${encodeURIComponent(this.myAddr)}&token=${encodeURIComponent(this.token)}`);
       const j = await r.json();
       for (const b of (j.msgs || [])) this.onBlob?.(b);
     } catch { /* offline / gateway jos — reîncearcă la următorul tick */ }

@@ -25,6 +25,8 @@ export interface Message {
   readAt?: number; // când a fost citit (pt auto-ștergere)
   remoteId?: string; // id-ul mesajului la EXPEDITOR (pe mesajele primite) — pt confirmare de citire
   readAckSent?: boolean; // am trimis deja confirmarea „citit" pentru acest mesaj primit
+  sender?: string; // DID-ul expeditorului (doar în grupuri — la 1:1 e implicit conv.did)
+  senderName?: string; // numele afișat al expeditorului (grupuri: eticheta de pe bublă)
 }
 
 export interface Conversation {
@@ -34,7 +36,8 @@ export interface Conversation {
   verified: boolean;
   unread: number;
   group: boolean;
-  members?: string[]; // DID-urile membrilor (doar la grupuri)
+  members?: string[]; // DID-urile TUTUROR membrilor, inclusiv tu (doar la grupuri)
+  admin?: string; // DID-ul creatorului = admin unic v1 (doar el face add/remove)
   ephemeral?: string; // ex. "24h"
   locked?: boolean; // are parolă (hash în SecureStore)
   burnAfterReadMs?: number; // auto-ștergere după citire (undefined = oprit)

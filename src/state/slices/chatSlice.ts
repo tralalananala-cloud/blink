@@ -1,7 +1,8 @@
 /** Slice conversații + mesaje (Faza 3.1) — bulk-ul fostului store.ts. Scrierile O(1) în SQLite
  *  trec prin `persist*` (messagePersistence); cross-slice (settings) prin get()/set() pe AppState. */
 import { ChatSlice, Slice } from "../types";
-import { Attachment, Message, MsgStatus, seedContacts, seedConversations } from "../../data/mockData";
+import { GROUP_MAX } from "../../messaging/codec";
+import { Conversation, Message, MsgStatus, seedContacts, seedConversations } from "../../data/mockData";
 import { notifyMessage } from "../../notify";
 import { dbRemoveItem, DB_KEYS } from "../../storage/db";
 import { wipeMessages } from "../../storage/messages";
@@ -16,6 +17,11 @@ function didId(did: string): string {
   return "d_" + did.replace(/[^a-zA-Z0-9]/g, "").slice(-12);
 }
 
+/** Roster de grup: fără duplicate, tăiat la GROUP_MAX (capul e politică, nu limită tehnică). */
+function dedupeCap(dids: string[]): string[] {
+  return Array.from(new Set(dids)).slice(0, GROUP_MAX);
+}
+
 export const createChatSlice: Slice<ChatSlice> = (set, get) => ({
   conversations: seedConversations(),
 
@@ -23,20 +29,23 @@ export const createChatSlice: Slice<ChatSlice> = (set, get) => ({
     // Dedupe la recepție: dacă există deja un mesaj cu același remoteId, nu-l mai adăuga
     // (resend după ack pierdut / livrare dublă). Întoarce id-ul existent, fără notificare.
     if (!fromMe && meta?.remoteId) {
-      const dup = get().conversations.find((c) => c.id === convId)?.messages.find((m) => m.remoteId === meta.remoteId);
+      // În grupuri remoteId-ul e unic doar per expeditor → dedupe pe (remoteId, sender).
+      const dup = get().conversations.find((c) => c.id === convId)?.messages
+        .find((m) => m.remoteId === meta.remoteId && (!meta.sender || m.sender === meta.sender));
       if (dup) return dup.id;
     }
     if (!fromMe) {
       const st = get();
       const conv = st.conversations.find((c) => c.id === convId);
       if (st.settings.notifications && conv) {
-        const preview = attachment ? `[${attachment.kind}]` : text;
+        const body = attachment ? `[${attachment.kind}]` : text;
+        const preview = meta?.senderName ? `${meta.senderName}: ${body}` : body;
         notifyMessage(conv.name, preview, conv.id);
       }
     }
     const id = meta?.id ?? `${convId}-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`;
     const status: MsgStatus = meta?.status ?? (fromMe ? "sending" : "received");
-    const m: Message = { id, text, fromMe, ts: Date.now(), status, attachment, remoteId: meta?.remoteId };
+    const m: Message = { id, text, fromMe, ts: Date.now(), status, attachment, remoteId: meta?.remoteId, sender: meta?.sender, senderName: meta?.senderName };
     set((s) => ({
       conversations: s.conversations.map((c) =>
         c.id === convId ? { ...c, lastTs: m.ts, messages: [...c.messages, m] } : c,
@@ -256,14 +265,87 @@ export const createChatSlice: Slice<ChatSlice> = (set, get) => ({
   },
 
   createGroup: (name, memberDids) => {
-    const id = "g_" + Date.now().toString(36);
+    // gid = identitatea grupului PE SÂRMĂ (călătorește în gt/gc) și totodată id-ul conversației.
+    const gid = "g_" + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
+    const myDid = get().identity?.did;
+    const members = dedupeCap(myDid ? [myDid, ...memberDids] : memberDids);
     set((s) => ({
       conversations: [
-        { id, name: name.trim() || "Grup nou", did: "did:key:zGroup" + id, verified: false, unread: 0, group: true, members: memberDids, lastTs: Date.now(), messages: [] },
+        { id: gid, name: name.trim() || "Grup nou", did: gid, admin: myDid, verified: false, unread: 0, group: true, members, lastTs: Date.now(), messages: [] },
         ...s.conversations,
       ],
     }));
-    return id;
+    return gid;
+  },
+
+  receiveGroupMessage: (fromDid, gid, text, remoteId, attachment, senderName, gname) => {
+    const st = get();
+    if (st.blocked.includes(fromDid)) return;
+    const contact = st.contacts.find((c) => c.did === fromDid);
+    const senderShown = contact?.name || (senderName && senderName.trim()) || fromDid.slice(0, 18) + "…";
+    let conv = st.conversations.find((c) => c.group && c.id === gid);
+    if (!conv) {
+      // Primul mesaj dintr-un grup necunoscut → auto-creare cu ce știm (expeditorul + numele
+      // de pe plic); roster-ul complet + adminul sosesc cu gc:create (ordinea nu contează).
+      conv = {
+        id: gid, name: (gname && gname.trim()) || "Grup", did: gid,
+        verified: false, unread: 0, group: true, members: [fromDid], lastTs: Date.now(), messages: [],
+      };
+      set((s) => ({ conversations: [conv!, ...s.conversations] }));
+    }
+    const isDup = !!remoteId && !!get().conversations.find((c) => c.id === gid)
+      ?.messages.some((m) => m.remoteId === remoteId && m.sender === fromDid && !m.fromMe);
+    st.appendMessage(gid, text, false, attachment, { remoteId, sender: fromDid, senderName: senderShown });
+    if (!isDup) set((s) => ({ conversations: s.conversations.map((c) => (c.id === gid ? { ...c, unread: c.unread + 1 } : c)) }));
+  },
+
+  applyGroupCtl: (fromDid, gc) => {
+    const st = get();
+    if (st.blocked.includes(fromDid)) return;
+    const conv = st.conversations.find((c) => c.group && c.id === gc.gid);
+    const patch = (p: Partial<Conversation>) =>
+      set((s) => ({ conversations: s.conversations.map((c) => (c.id === gc.gid ? { ...c, ...p } : c)) }));
+    if (gc.act === "create") {
+      const members = dedupeCap([fromDid, ...(gc.members ?? [])]); // creatorul e mereu în roster
+      const name = gc.name?.trim();
+      if (!conv) {
+        set((s) => ({
+          conversations: [
+            { id: gc.gid, name: name || "Grup", did: gc.gid, admin: fromDid, verified: false, unread: 0, group: true, members, lastTs: Date.now(), messages: [] },
+            ...s.conversations,
+          ],
+        }));
+      } else if (!conv.admin || conv.admin === fromDid) {
+        // conv auto-creată de un gt sosit înaintea gc-ului → completează roster/nume/admin
+        patch({ admin: fromDid, members, ...(name ? { name } : {}) });
+      }
+      return;
+    }
+    if (!conv) return;
+    if (gc.act === "leave") {
+      patch({ members: (conv.members ?? []).filter((d) => d !== fromDid) });
+      return;
+    }
+    if (conv.admin !== fromDid) return; // add/remove = doar adminul
+    if (gc.act === "add") patch({ members: dedupeCap([...(conv.members ?? []), ...(gc.members ?? [])]) });
+    if (gc.act === "remove") patch({ members: (conv.members ?? []).filter((d) => !(gc.members ?? []).includes(d)) });
+  },
+
+  markGroupMsgStatus: (gid, msgId, status) => {
+    let changed = false;
+    set((s) => {
+      const conversations = s.conversations.map((c) => {
+        if (!c.group || c.id !== gid) return c;
+        const messages = c.messages.map((m) => {
+          if (m.id !== msgId || !m.fromMe || RANK[status] <= RANK[m.status]) return m;
+          changed = true;
+          return { ...m, status };
+        });
+        return changed ? { ...c, messages } : c;
+      });
+      return changed ? { conversations } : {};
+    });
+    if (changed) persistStatus(gid, msgId, status);
   },
 
   // Igienă RAM — scoate textele decriptate din memorie (la lock pe background).

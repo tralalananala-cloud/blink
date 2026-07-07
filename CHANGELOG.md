@@ -1,7 +1,35 @@
 # Changelog
 
-Toate schimbările notabile ale Blink. Versionare vizibilă userului; formatul mesajelor pe
-rețea rămâne compatibil între versiuni — **actualizezi fără reinstalare și fără re-scanare QR**.
+Toate schimbările notabile ale Blink. Versionare vizibilă userului; formatul mesajelor **1:1**
+rămâne compatibil între versiuni — **actualizezi fără reinstalare și fără re-scanare QR**.
+
+## [1.4.0] — 2026-07-07 · Grupuri
+
+Blink are grupuri, cu **exact aceeași criptare ca la 1:1**. Nu e o cheie de grup nouă și
+neverificată: fiecare mesaj de grup pleacă **cifrat individual (libsignal) către fiecare membru**
+— aceleași garanții pe care le ai deja în conversațiile față-în-față.
+
+### Adăugat
+- **Grupuri criptate cap-la-cap.** Creezi un grup, adaugi membri din contacte, scrii text și
+  trimiți poze — totul E2EE. Pe fiecare mesaj vezi cine l-a trimis. Bifa **✓✓** apare când
+  **toți** membrii au confirmat primirea.
+- **Administrare grup.** Creatorul e admin: adaugă și scoate membri. Oricine poate **părăsi**
+  grupul; ceilalți sunt anunțați, iar istoricul rămâne pe dispozitivul tău.
+
+### Onestitate
+- **Nu e „descentralizat" și releul vede volumul.** Un mesaj de grup = N trimiteri 1:1 prin
+  releul orb. Releul **nu vede conținutul** (e cifrat), dar vede că ai trimis N plicuri — adică
+  **cât de mare e grupul**, nu ce scrii. Onest față de metadate.
+- **Toți membrii au nevoie de v1.4+.** Formatul de grup e nou. Un prieten pe o versiune mai
+  veche **nu poate participa** la grup — îi va apărea mesajul greșit (ca text tehnic într-o
+  conversație separată). Trimite-le linkul de actualizare înainte să-i adaugi.
+- **Fără MLS, fără chei de grup.** Am ales fan-out 1:1 tocmai ca să nu introducem criptografie
+  nouă. Compromisul: e eficient pentru grupuri mici (până la 16 membri), nu pentru sute.
+
+### Note
+- **1:1 rămâne fără re-pair.** Conversațiile față-în-față folosesc același format ca înainte —
+  actualizezi peste versiunea veche, îți păstrezi identitatea și conversațiile. Doar **grupurile**
+  cer ca toți să fie pe v1.4+.
 
 ## [1.2.2] — 2026-07-04 · Stabilitate 1:1
 

@@ -6,6 +6,7 @@ import { fonts } from "../theme/typography";
 import { useTheme, useType } from "../theme/ThemeProvider";
 import { useI18n, format } from "../i18n";
 import { useApp } from "../state/store";
+import { announceGroup } from "../messaging/group";
 import { Avatar } from "./Avatar";
 
 export function NewGroupModal({ visible, onClose, onCreated }: { visible: boolean; onClose: () => void; onCreated: (id: string) => void }) {
@@ -29,6 +30,7 @@ export function NewGroupModal({ visible, onClose, onCreated }: { visible: boolea
   function create() {
     if (sel.size < 2) return;
     const id = createGroup(name, [...sel]);
+    announceGroup(id); // gc:create către toți membrii (roster complet + nume) — fan-out G3
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     close();
     onCreated(id);
@@ -71,7 +73,7 @@ export function NewGroupModal({ visible, onClose, onCreated }: { visible: boolea
             }}
           />
 
-          <Text style={[type.caption, { marginTop: space.sm }]}>{t.friends.groupDemo}</Text>
+          <Text style={[type.caption, { marginTop: space.sm }]}>{t.friends.groupE2E}</Text>
 
           <Pressable onPress={create} disabled={sel.size < 2} style={[styles.createBtn, { backgroundColor: colors.primary, opacity: sel.size < 2 ? 0.4 : 1 }]}>
             <Text style={{ color: colors.onPrimary, fontFamily: fonts.bodySemibold, fontSize: 15 }}>
