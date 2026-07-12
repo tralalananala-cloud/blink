@@ -209,6 +209,13 @@ export default function Conversation() {
                 </Pressable>
               </>
             ) : null}
+            {/* Ștergere expresă din header — același flux ca „Șterge la ambii" din opțiuni
+                (confirmare destructivă, apoi dc către peer + golire locală). */}
+            {!conv.group ? (
+              <Pressable hitSlop={8} onPress={onDeleteBoth}>
+                <Icon name="trash-outline" size={22} color={colors.danger} />
+              </Pressable>
+            ) : null}
             {!conv.group ? (
               <Pressable hitSlop={8} onPress={() => setVerifyOpen(true)}>
                 <Icon name="shield" size={22} color={conv.verified ? colors.secure : (family === "cipher" ? colors.accent : colors.primary)} />

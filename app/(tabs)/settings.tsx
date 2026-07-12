@@ -20,10 +20,9 @@ import { useTheme, useType } from "../../src/theme/ThemeProvider";
 import { useI18n, Lang } from "../../src/i18n";
 import { useApp, ThemeName } from "../../src/state/store";
 import { engine } from "../../src/crypto";
+import { RETICULUM_GATEWAY } from "../../src/config";
 import { themes } from "../../src/theme/themes";
-import { TransportStatus } from "../../src/transport/types";
 
-const MODES: TransportStatus["mode"][] = ["p2p", "tor", "mesh"];
 const THEME_ORDER: ThemeName[] = ["cipher", "messenger", "telegram", "abyss", "nebula"];
 
 export default function Settings() {
@@ -38,8 +37,7 @@ export default function Settings() {
 
   useEffect(() => { hasAppPasscode().then(setAppLock); }, []);
 
-  // Tor/mesh nu sunt încă reale → dacă o stare veche le avea selectate, normalizează la p2p
-  // (releul criptat = singurul transport care chiar rulează acum).
+  // Releul criptat e transportul de bază, mereu pornit — starea veche cu alt "mode" se normalizează.
   useEffect(() => {
     if (settings.transportMode !== "p2p") update({ transportMode: "p2p" });
   }, [settings.transportMode]);
@@ -121,22 +119,42 @@ export default function Settings() {
         <Card>
           <Text style={sectionStyle}>{t.settings.transport}</Text>
           <Text style={[type.caption, { marginBottom: space.sm }]}>{t.settings.transportBody}</Text>
-          <View style={[styles.segment, { backgroundColor: colors.surface }]}>
-            {MODES.map((m) => {
-              const soon = m !== "p2p"; // Tor + mesh nu sunt încă reale → dezactivate (vezi normalizarea de mai sus)
-              const label = m === "p2p" ? t.settings.p2p : m === "tor" ? "Tor" : t.settings.mesh;
-              return (
-                <Text
-                  key={m}
-                  onPress={soon ? undefined : () => update({ transportMode: m })}
-                  style={[seg(settings.transportMode === m && !soon), soon && { opacity: 0.4 }]}
-                >
-                  {soon ? `${label} ${t.settings.soon}` : label}
-                </Text>
-              );
-            })}
-          </View>
-          <SettingRow title={`${t.settings.selfRelay} ${t.settings.soon}`} subtitle={t.settings.selfRelayBody} value={false} onValueChange={() => {}} disabled />
+
+          {/* Reticulum (experimental) — transport descentralizat prin gateway, decuplat de releu */}
+          <SettingRow
+            title={t.settings.reticulum}
+            subtitle={t.settings.reticulumBody}
+            value={!!settings.reticulumEnabled}
+            onValueChange={(v) => {
+              // blocăm doar dacă nu există NICIO adresă (nici în câmp, nici fallback-ul din build)
+              if (v && !(settings.reticulumGateway ?? "").trim() && !RETICULUM_GATEWAY) { notifyMessage("Blink", t.settings.reticulumOnNoAddr); return; }
+              update({ reticulumEnabled: v });
+              relay.refreshReticulum();
+            }}
+          />
+          {/* Adresa gateway-ului — MEREU vizibilă: o pui ÎNTÂI, apoi pornești toggle-ul. */}
+          <TextInput
+            value={settings.reticulumGateway ?? ""}
+            onChangeText={(gw) => update({ reticulumGateway: gw })}
+            onBlur={() => relay.refreshReticulum()}
+            placeholder={t.settings.reticulumGatewayPlaceholder}
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            style={[styles.reticulumInput, { backgroundColor: colors.surface, borderColor: colors.border, color: colors.textPrimary }]}
+          />
+
+          {/* BLE mesh (experimental) — telefon↔telefon prin Bluetooth, fără internet (v1: proximitate) */}
+          <SettingRow
+            title={t.settings.bleMesh}
+            subtitle={t.settings.bleMeshBody}
+            value={!!settings.bleMeshEnabled}
+            onValueChange={(v) => {
+              update({ bleMeshEnabled: v });
+              relay.refreshBleMesh();
+            }}
+          />
         </Card>
 
         {/* Privacy */}
@@ -222,6 +240,7 @@ const styles = StyleSheet.create({
   section: { fontFamily: fonts.display, fontSize: 16, marginBottom: space.xs },
   nameInput: { height: 48, borderRadius: radius.lg, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: space.md, fontFamily: fonts.body, fontSize: 15 },
   segment: { flexDirection: "row", gap: space.sm, marginVertical: space.sm, borderRadius: radius.lg, padding: 4 },
+  reticulumInput: { marginTop: space.sm, height: 44, borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: space.md, fontFamily: fonts.mono, fontSize: 13 },
   seg: { flex: 1, textAlign: "center", paddingVertical: space.sm, borderRadius: radius.md, fontFamily: fonts.bodyMedium, fontSize: 13, overflow: "hidden" },
   statusPill: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.full, paddingHorizontal: space.sm, paddingVertical: 3 },
   themeGrid: { flexDirection: "row", flexWrap: "wrap", gap: space.sm },

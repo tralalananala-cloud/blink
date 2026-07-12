@@ -12,12 +12,11 @@ export const RELAY_URL = "wss://blink-relay.tralalananala.workers.dev";
 export const RELAY_HTTP = RELAY_URL.replace(/^wss:/, "https:").replace(/^ws:/, "http:");
 
 /**
- * Gateway Reticulum (A1 transport orb, opțional). Gol = dezactivat → Blink merge pe releu.
- * Setat (ex. "http://192.168.0.x:8090" în LAN sau un nod găzduit) → mesajele E2E pot ruta
- * descentralizat prin Reticulum/I2P (IP ascuns), gateway-ul cărând doar blob-uri opace.
- * Experimental — vezi ~/reticulum-lab.
+ * Gateway-ul Reticulum public Blink (A1 transport orb) — fallback-ul din build: folosit când
+ * câmpul din Settings e gol (ex. update de pe o versiune veche). Userii cu nod propriu pun
+ * adresa lor în Settings→Transport și o suprascriu. Transportul pornește DOAR din toggle.
  */
-export const RETICULUM_GATEWAY = "";
+export const RETICULUM_GATEWAY = "https://blink-gw.tralalananala.workers.dev";
 
 /**
  * Servere ICE pentru apeluri WebRTC (Faza 5). STUN public gratuit (Google) acoperă

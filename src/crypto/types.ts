@@ -119,8 +119,11 @@ export interface CryptoEngine {
   /** Inițiază o sesiune reală cu un peer pornind de la bundle-ul lui (X3DH). */
   startOutbound(peerDid: string, bundle: SerializedBundle): Promise<SessionInfo>;
 
-  /** Există deja o sesiune (ratchet) cu acest peer? */
+  /** Există deja o sesiune (ratchet) cu acest peer? (doar cache-ul de runtime) */
   hasSession(peerDid: string): boolean;
+
+  /** Ca hasSession, dar consultă și store-ul persistat (sesiuni de dinaintea restartului). */
+  hasSessionStored?(peerDid: string): Promise<boolean>;
 
   /** Cripteaza un mesaj text pentru un peer (avanseaza ratchet-ul). */
   encrypt(peerDid: string, plaintext: string): Promise<CipherEnvelope>;

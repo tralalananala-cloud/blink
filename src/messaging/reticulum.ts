@@ -8,6 +8,7 @@
  */
 import { RETICULUM_GATEWAY } from "../config";
 import { engine } from "../crypto";
+import { useApp } from "../state/store";
 
 class ReticulumTransport {
   myAddr: string | null = null;
@@ -17,10 +18,17 @@ class ReticulumTransport {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private onBlob: ((blobB64: string) => void) | null = null;
 
-  on(): boolean { return !!RETICULUM_GATEWAY; }
+  /** Adresa gateway-ului: setarea userului are prioritate; altfel valoarea din build (de obicei gol). */
+  private gw(): string {
+    return (useApp.getState().settings.reticulumGateway || RETICULUM_GATEWAY || "").trim().replace(/\/$/, "");
+  }
+  /** Activ doar dacă userul a pornit toggle-ul ȘI există o adresă de gateway. */
+  on(): boolean {
+    return !!useApp.getState().settings.reticulumEnabled && !!this.gw();
+  }
 
   private async post(path: string, body: any): Promise<any> {
-    const r = await fetch(RETICULUM_GATEWAY + path, {
+    const r = await fetch(this.gw() + path, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
     });
     return r.json();
@@ -61,10 +69,13 @@ class ReticulumTransport {
   }
   stopPolling() { if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; } }
 
+  /** Uită adresa/token-ul + oprește polling-ul (la schimbarea gateway-ului sau dezactivare). */
+  reset() { this.stopPolling(); this.myAddr = null; this.token = null; }
+
   private async poll() {
     if (!this.on() || !this.myAddr || !this.token) return;
     try {
-      const r = await fetch(`${RETICULUM_GATEWAY}/recv?addr=${encodeURIComponent(this.myAddr)}&token=${encodeURIComponent(this.token)}`);
+      const r = await fetch(`${this.gw()}/recv?addr=${encodeURIComponent(this.myAddr)}&token=${encodeURIComponent(this.token)}`);
       const j = await r.json();
       for (const b of (j.msgs || [])) this.onBlob?.(b);
     } catch { /* offline / gateway jos — reîncearcă la următorul tick */ }

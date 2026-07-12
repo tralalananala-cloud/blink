@@ -68,6 +68,14 @@ export const useApp = create<AppState>()(
       name: DB_KEYS.store,
       storage: createJSONStorage(() => encStorage),
       version: 1,
+      // Merge în adâncime pe `settings`: la un update de app care ADAUGĂ câmpuri noi de setări,
+      // starea persistată veche nu le are → shallow-merge-ul implicit ar lăsa câmpul `undefined`
+      // (a crăpat toggle-ul Reticulum: `undefined.trim()`). Aici default-urile noilor câmpuri
+      // supraviețuiesc, fără migrare/reset.
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<typeof current>;
+        return { ...current, ...p, settings: { ...current.settings, ...(p.settings ?? {}) } };
+      },
       // persistă DOAR datele (nu funcțiile); cheile private rămân în SecureStore.
       // M1: pe nativ, mesajele NU mai intră în blob (sunt în SQLite) → blob mic.
       partialize: (s) => ({

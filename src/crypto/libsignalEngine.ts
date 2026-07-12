@@ -296,6 +296,18 @@ export class LibsignalEngine implements CryptoEngine {
 
   hasSession(peerDid: string): boolean { return this.known.has(peerDid); }
 
+  /** `known` e doar cache de runtime — după restart e gol deși sesiunea persistată există în
+   *  store. Varianta async consultă store-ul și reumple cache-ul; fără ea, offline (fără releu
+   *  pt bundle) sesiunea veche perfect utilizabilă era invizibilă → mesajele mureau în outbox. */
+  async hasSessionStored(peerDid: string): Promise<boolean> {
+    if (this.known.has(peerDid)) return true;
+    try {
+      const s = await this.sessionStore.getSession(new ProtocolAddress(peerDid, DEVICE_ID));
+      if (s) { this.known.add(peerDid); return true; }
+    } catch {}
+    return false;
+  }
+
   async establishSession(peerDid: string, peerBundle?: unknown): Promise<SessionInfo> {
     if (peerBundle) return this.startOutbound(peerDid, peerBundle as SerializedBundle);
     return { peerDid, ratchetStep: 0, safetyNumber: "", established: this.known.has(peerDid) };

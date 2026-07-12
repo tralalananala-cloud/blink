@@ -21,6 +21,12 @@ export interface Settings {
   notifications: boolean;
   /** Numele/pseudonimul tău — apare la ceilalți când le scrii / te adaugă. */
   profileName: string;
+  /** Transport Reticulum (experimental): rutează mesajele descentralizat prin gateway. */
+  reticulumEnabled: boolean;
+  /** Adresa gateway-ului Reticulum (https). Gol → folosește valoarea din build (de obicei gol). */
+  reticulumGateway: string;
+  /** Mesh Bluetooth (experimental): livrare directă telefon↔telefon în proximitate (BLE). */
+  bleMeshEnabled: boolean;
 }
 
 export interface AuthSlice {

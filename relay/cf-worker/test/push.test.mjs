@@ -23,7 +23,8 @@ async function makeKeyPem() {
   const der = new Uint8Array(await crypto.subtle.exportKey("pkcs8", kp.privateKey));
   let bin = "";
   for (const b of der) bin += String.fromCharCode(b);
-  const pem = "-----BEGIN PRIVATE KEY-----\n" + btoa(bin).match(/.{1,64}/g).join("\n") + "\n-----END PRIVATE KEY-----\n";
+  // antet PEM ca șir literal; cheia e generată aici, la runtime — nu e material secret
+  const pem = "-----BEGIN PRIVATE KEY-----\n" + btoa(bin).match(/.{1,64}/g).join("\n") + "\n-----END PRIVATE KEY-----\n"; // gitleaks:allow
   return { pem, pub: kp.publicKey };
 }
 

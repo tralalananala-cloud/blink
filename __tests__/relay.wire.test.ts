@@ -64,7 +64,8 @@ jest.mock("../src/media/wire", () => mockMedia);
 const mockCall: any = { setSignalSender: jest.fn(), handleSignal: jest.fn() };
 jest.mock("../src/calls/webrtc", () => ({ callManager: mockCall }));
 const mockReticulum: any = {
-  myAddr: null, register: jest.fn(), startPolling: jest.fn(), stopPolling: jest.fn(), send: jest.fn(async () => false),
+  myAddr: null, register: jest.fn(async () => null), startPolling: jest.fn(), stopPolling: jest.fn(),
+  send: jest.fn(async () => false), on: jest.fn(() => false), reset: jest.fn(),
 };
 jest.mock("../src/messaging/reticulum", () => ({ reticulum: mockReticulum }));
 

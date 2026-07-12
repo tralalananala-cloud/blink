@@ -11,11 +11,12 @@
 import { engine } from "../crypto";
 import { CipherEnvelope, SerializedBundle } from "../crypto/types";
 import { useApp } from "../state/store";
-import { RELAY_URL, RELAY_HTTP, RETICULUM_GATEWAY } from "../config";
+import { RELAY_URL, RELAY_HTTP } from "../config";
 import { Attachment } from "../data/mockData";
 import { createMediaSink, MediaSink, streamFileChunks, writeMedia } from "../media/wire";
 import { callManager } from "../calls/webrtc";
 import { reticulum } from "./reticulum";
+import { bleMesh } from "./ble";
 import { toB64, fromB64, utf8, fromUtf8, hash } from "../crypto/signal/primitives";
 import { AckKind, ctl, parseControl } from "./codec"; // codec de control E2E (Faza 3.2) — pur, testat
 import { Outbox } from "./outbox"; // fiabilitatea livrării (Faza 3.2) — outbox/pendingAck/sweep
@@ -55,7 +56,7 @@ class Relay {
   // e injectată (callback-uri spre metodele de mai jos). `pendingAck` e expus prin getter-ul de jos
   // (testele 1.3 inspectează `relay.pendingAck`).
   private outboxMgr = new Outbox({
-    isConnected: () => this.connected,
+    isConnected: () => this.connected || bleMesh.anyNearby(), // sweep-ul rulează și pe mesh, cu releul jos
     sendText: (to, text, id) => this.sendText(to, text, id),
     sendMedia: (to, att, id) => this.sendMedia(to, att, id),
     trySendAck: (to, id, kind) => this.trySendAck(to, id, kind),
@@ -124,6 +125,10 @@ class Relay {
   connect() {
     const did = this.myDid();
     if (!did) return; // fără identitate încă
+    // Reticulum + BLE sunt transporturi INDEPENDENTE: pornesc aici (rulează chiar dacă WS-ul
+    // releului pică mai jos), și fiindcă connect() e re-chemat la scheduleRetry, se re-încearcă singure.
+    void this.ensureReticulum();
+    void this.ensureBleMesh();
     // Gardă TLS (Faza 0): în producție refuză releu necriptat (ws://), cu excepția localhost dev.
     if (!isDev && this.url.startsWith("ws://") && !/127\.0\.0\.1|localhost/.test(this.url)) {
       console.warn("[Blink] Releu necriptat (ws://) blocat în producție — folosește wss://.");
@@ -155,7 +160,8 @@ class Relay {
       this.stopPing(); this.outboxMgr.stopSweep(); this.clearRegWatchdog(); this.scheduleRetry();
     };
     ws.onerror = () => {};
-    ws.onmessage = (ev: any) => this.handle(ev.data);
+    ws.onmessage = (ev: any) =>
+      void this.handle(ev.data).catch((e) => console.warn("[Blink] plic releu invalid, ignorat:", String((e as Error)?.message ?? e)));
   }
 
   /**
@@ -194,11 +200,82 @@ class Relay {
     this.outboxMgr.startSweep();
     this.outboxMgr.flush();
     this.groupHooks?.onReady(); // grupuri: pornește sweep-ul + golește coada offline de fan-out
-    if (RETICULUM_GATEWAY && did) {
-      reticulum.register(did).then((addr) => {
-        if (addr) reticulum.startPolling((blob) => { try { this.handle(fromUtf8(fromB64(blob))); } catch {} });
-      });
+    void this.ensureReticulum(); // idempotent — și din connect(), ca să nu depindă de releu
+    void this.ensureBleMesh();
+  }
+
+  // Inițializează transportul Reticulum INDEPENDENT de releu: dacă e pornit din setări și avem
+  // identitate, se înregistrează la gateway + pornește polling-ul. Idempotent (guard `reticulumUp`)
+  // și re-încercabil (guard se ridică doar la succes) → chemat din connect() rulează chiar dacă
+  // WebSocket-ul releului pică = Reticulum merge și cu releul blocat/cenzurat.
+  private reticulumUp = false;
+  private reticulumBusy = false; // anti-cursă: register() e challenge-response cu nonce de unică
+                                 // folosință → două apeluri concurente își suprascriu nonce-ul unul
+                                 // altuia = „auth invalid". Garda serializează inițializarea.
+  private async ensureReticulum(): Promise<void> {
+    const did = this.myDid();
+    if (!did || !reticulum.on() || this.reticulumUp || this.reticulumBusy) return;
+    this.reticulumBusy = true;
+    try {
+      const addr = await reticulum.register(did);
+      if (addr) {
+        this.reticulumUp = true;
+        reticulum.startPolling((blob) => {
+          try {
+            void this.handle(fromUtf8(fromB64(blob))).catch((e) =>
+              console.warn("[Blink] plic Reticulum invalid, ignorat:", String((e as Error)?.message ?? e))
+            );
+          } catch {}
+        });
+      }
+    } finally { this.reticulumBusy = false; }
+  }
+
+  /** Apelat de ecranul Settings când userul schimbă toggle-ul/adresa Reticulum → re-inițializează. */
+  refreshReticulum(): void {
+    this.reticulumUp = false;
+    reticulum.reset();
+    if (reticulum.on()) void this.ensureReticulum();
+  }
+
+  // BLE mesh (v1 — proximitate, vezi BLE_MESH_PLAN.md): pornește radio-ul dacă toggle-ul e ON
+  // și avem identitate. Independent de rețea/releu — livrează și cu internetul complet căzut.
+  // Idempotent (bleMesh.start are guard propriu); blob-urile primite intră pe același handle()
+  // ca cele de pe releu/Reticulum (format identic {t:"msg",env}).
+  private bleUp = false;
+  private async ensureBleMesh(): Promise<void> {
+    const did = this.myDid();
+    if (!did || !bleMesh.on() || this.bleUp) return;
+    this.bleUp = await bleMesh.start(did, (blob) => {
+      try {
+        const raw = fromUtf8(fromB64(blob));
+        // Gard: un plic corupt pe fir (cadru trunchiat) NU mai dispare tăcut — se vede în log.
+        this.handle(raw).catch((e) =>
+          console.warn("[Blink] plic BLE invalid, ignorat:", String((e as Error)?.message ?? e))
+        );
+      } catch {}
+    });
+    if (this.bleUp) {
+      // Peer nou în rază → golește outbox-ul (mesajele cozite offline pleacă prin BLE, fără releu)
+      // și ține sweep-ul de resend viu chiar dacă WS-ul releului n-a pornit niciodată.
+      bleMesh.onPeerNear = () => { this.outboxMgr.startSweep(); this.outboxMgr.flush(); };
+      if (bleMesh.anyNearby()) { this.outboxMgr.startSweep(); this.outboxMgr.flush(); }
     }
+  }
+
+  /** Peer-ul e atins de un transport alternativ (BLE/Reticulum) chiar cu releul jos? */
+  private altReach(peerDid: string): boolean {
+    return (
+      (bleMesh.on() && bleMesh.canReach(peerDid)) ||
+      (reticulum.on() && this.reticulumUp && this.peerReticulum.has(peerDid))
+    );
+  }
+
+  /** Apelat de Settings când userul schimbă toggle-ul BLE mesh → repornește curat. */
+  refreshBleMesh(): void {
+    this.bleUp = false;
+    bleMesh.reset();
+    if (bleMesh.on()) void this.ensureBleMesh();
   }
 
   private armRegWatchdog() {
@@ -254,7 +331,8 @@ class Relay {
     if (this.qackTimer) { clearTimeout(this.qackTimer); this.qackTimer = null; }
     this.qackBuf.clear();
     this.peerReticulum.clear();
-    reticulum.stopPolling();
+    reticulum.reset(); this.reticulumUp = false;
+    bleMesh.reset(); this.bleUp = false;
     this.mediaAsm.clear();
     this.waiters.clear();
     this.pushToken = null;
@@ -262,7 +340,11 @@ class Relay {
 
   private async handle(raw: any) {
     let m: any;
-    try { m = JSON.parse(typeof raw === "string" ? raw : raw.toString()); } catch { return; }
+    // JSON invalid = cadru corupt pe transport. Nu crăpăm (gunoiul de pe releu se ignoră), dar nici
+    // nu tăcem: un mesaj pierdut tăcut e cel mai scump bug dintr-un messenger — vezi cadrul BLE
+    // trunchiat la 512o care a mâncat mesaje fără nicio urmă în log.
+    try { m = JSON.parse(typeof raw === "string" ? raw : raw.toString()); }
+    catch { console.warn("[Blink] cadru invalid pe transport, ignorat (", String(raw).length, "octeți )"); return; }
     if (m.t === "challenge" && m.nonce) { this.doRegister(m.nonce); return; } // auth releu (C1)
     if (m.t === "ready") { this.onRegistered(); return; } // reg confirmat → pornește restul (msg-urile din coadă vin separat)
     if (m.t === "denied") { if (isDev) console.warn("[Blink] releu a refuzat reg:", m.reason); this.regSent = false; return; }
@@ -282,7 +364,7 @@ class Relay {
       // #7 dedupe: plic deja procesat (replay sau re-livrare din coadă) → confirmă-l și ieși,
       // fără să-l reprocesăm sau să declanșăm bannere. (amprenta nu se reține decât pe succes.)
       const fp = this.envFp(env);
-      if (this.seenEnv.has(fp)) { if (qid) this.queueAck(qid); return; }
+        if (this.seenEnv.has(fp)) { if (qid) this.queueAck(qid); return; }
       try {
         let plaintext: string;
         if (env.sealed && engine.decryptSealed) {
@@ -374,7 +456,7 @@ class Relay {
             return;
           }
         }
-      } catch {
+      } catch (e) {
         // #5 — marchează „re-pair" DOAR pt un contact cu care AVEM o sesiune (desincronizare
         // reală de ratchet), nu pentru plicuri gunoi/replay/spoof de la necunoscuți (altfel
         // oricine ne-ar putea spama bannerul trimițând plicuri invalide). Debounce 30s/contact.
@@ -402,6 +484,8 @@ class Relay {
 
   async ensureSession(peerDid: string): Promise<boolean> {
     if (engine.hasSession(peerDid)) return true;
+    // sesiune persistată de dinaintea restartului? (offline nu putem lua bundle — dar nici nu trebuie)
+    if (engine.hasSessionStored && (await engine.hasSessionStored(peerDid))) return true;
     const b = await this.fetchBundle(peerDid);
     if (!b) return false;
     await engine.startOutbound(peerDid, b);
@@ -419,11 +503,19 @@ class Relay {
     return await engine.encrypt(peerDid, payload);
   }
 
-  /** Trimite plicul: sealed → HTTP POST ANONIM (releul nu vede expeditorul); altfel → WS. */
+  /** Trimite plicul pe lanțul de transporturi: BLE (proximitate) → Reticulum → releu. */
   private async transmit(peerDid: string, env: any): Promise<void> {
+    // BLE mesh: peer-ul e în raza Bluetooth → livrare DIRECTĂ telefon↔telefon, zero internet
+    // (blob opac = același plic E2E). Eșec → cade pe următorul transport din lanț.
+    if (bleMesh.on() && bleMesh.canReach(peerDid)) {
+      const json = JSON.stringify({ t: "msg", env });
+      const bytes = utf8(json);
+      const blob = toB64(bytes);
+      if (await bleMesh.send(peerDid, blob)) return;
+    }
     // A1: dacă știm adresa Reticulum a peer-ului, rutează DESCENTRALIZAT prin gateway
     // (blob opac = plicul E2E; nodurile nu-l văd). Fallback la releu dacă eșuează.
-    if (RETICULUM_GATEWAY && this.peerReticulum.has(peerDid)) {
+    if (reticulum.on() && this.peerReticulum.has(peerDid)) {
       const blob = toB64(utf8(JSON.stringify({ t: "msg", env })));
       if (await reticulum.send(this.peerReticulum.get(peerDid)!, blob)) return;
     }
@@ -434,15 +526,23 @@ class Relay {
       });
       if (!res.ok) throw new Error("HTTP /send status " + res.status);
     } else {
-      this.ws!.send(JSON.stringify({ t: "send", to: peerDid, env }));
+      // cu releul jos (BLE/Reticulum au eșuat mai sus) aruncăm curat → apelantul cozește în outbox
+      if (!this.ws || this.ws.readyState !== 1) throw new Error("niciun transport disponibil");
+      this.ws.send(JSON.stringify({ t: "send", to: peerDid, env }));
     }
   }
 
   /** Trimite un text criptat E2E către un DID; msgId leagă bifele de confirmare. */
   async sendText(peerDid: string, plaintext: string, msgId: string): Promise<{ ok: boolean; reason?: string }> {
-    if (!this.connected) { this.outboxMgr.queueOut({ to: peerDid, kind: "text", text: plaintext, id: msgId }); return { ok: true, reason: "queued" }; }
+    // Releul jos NU mai înseamnă automat outbox: dacă BLE/Reticulum atinge peer-ul, mergem
+    // pe lanțul transmit() (scenariul-vedetă mesh = internet complet căzut).
+    if (!this.connected && !this.altReach(peerDid)) { this.outboxMgr.queueOut({ to: peerDid, kind: "text", text: plaintext, id: msgId }); return { ok: true, reason: "queued" }; }
     const has = await this.ensureSession(peerDid);
-    if (!has) return { ok: false, reason: "no-bundle" };
+    if (!has) {
+      // fără sesiune și fără releu (bundle-ul vine doar de acolo) → cozit, nu eșec
+      if (!this.connected) { this.outboxMgr.queueOut({ to: peerDid, kind: "text", text: plaintext, id: msgId }); return { ok: true, reason: "queued" }; }
+      return { ok: false, reason: "no-bundle" };
+    }
     const env = await this.encryptFor(peerDid, JSON.stringify(ctl.text(msgId, plaintext, myName(), reticulum.myAddr ?? undefined)));
     try { await this.transmit(peerDid, env); }
     catch { this.outboxMgr.queueOut({ to: peerDid, kind: "text", text: plaintext, id: msgId }); return { ok: false, reason: "send-failed" }; }
@@ -476,8 +576,11 @@ class Relay {
 
   /** Trimite un atașament criptat E2E pe bucăți, STREAMING (M4 — fără tot fișierul în RAM). */
   async sendMedia(peerDid: string, att: Attachment, msgId: string, gid?: string): Promise<{ ok: boolean; reason?: string }> {
-    if (!this.connected) { this.outboxMgr.queueOut({ to: peerDid, kind: "media", att, id: msgId }); return { ok: true, reason: "queued" }; }
-    if (!(await this.ensureSession(peerDid))) return { ok: false, reason: "no-bundle" };
+    if (!this.connected && !this.altReach(peerDid)) { this.outboxMgr.queueOut({ to: peerDid, kind: "media", att, id: msgId }); return { ok: true, reason: "queued" }; }
+    if (!(await this.ensureSession(peerDid))) {
+      if (!this.connected) { this.outboxMgr.queueOut({ to: peerDid, kind: "media", att, id: msgId }); return { ok: true, reason: "queued" }; }
+      return { ok: false, reason: "no-bundle" };
+    }
     let mhSent = false;
     try {
       const res = await streamFileChunks(att.uri, async (b64, i, total) => {
@@ -508,7 +611,7 @@ class Relay {
 
   // O singură încercare de a trimite o confirmare; întoarce true doar dacă a plecat efectiv.
   private async trySendAck(peerDid: string, id: string, kind: "delivered" | "read"): Promise<boolean> {
-    if (!this.connected) return false;
+    if (!this.connected && !this.altReach(peerDid)) return false;
     if (!(await this.ensureSession(peerDid))) return false;
     try {
       const env = await this.encryptFor(peerDid, JSON.stringify(ctl.ack(id, kind)));

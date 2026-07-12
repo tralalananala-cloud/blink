@@ -25,6 +25,8 @@ expo-env.d.ts
 /ios/
 *.apk
 *.aab
+# artefacte gradle ale modulelor locale (sursa modulului rămâne tracked)
+modules/*/android/build/
 
 # web export
 dist-web/

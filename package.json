@@ -1,6 +1,6 @@
 {
   "name": "blink",
-  "version": "1.2.2",
+  "version": "1.4.0",
   "private": true,
   "description": "Blink — messenger E2EE descentralizat (Android, Expo). Cripto reală: libsignal PQXDH + Double Ratchet (post-quantum), sealed sender; releu Cloudflare Worker cu auth challenge-response.",
   "main": "expo-router/entry",

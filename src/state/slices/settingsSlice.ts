@@ -15,6 +15,10 @@ export const createSettingsSlice: Slice<SettingsSlice> = (set, get) => ({
     biometricLock: false,
     notifications: true,
     profileName: "",
+    reticulumEnabled: false,
+    // gateway-ul public Blink pre-completat — userul doar pornește toggle-ul (poate pune propriul gateway)
+    reticulumGateway: "https://blink-gw.tralalananala.workers.dev",
+    bleMeshEnabled: false,
   },
 
   updateSettings: (patch) =>
