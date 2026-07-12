@@ -30,7 +30,10 @@ export function useChatMessages(conv: Conversation | undefined, deps: Deps) {
   async function deliver(plaintext: string, attachment?: Attachment) {
     if (!conv) return;
     const id = append(conv.id, plaintext, true, attachment); // afișează imediat
-    setTimeout(() => deps.listRef.current?.scrollToEnd({ animated: true }), 60);
+    // Derularea NU se face aici. Un scrollToEnd pe timer pornea înainte ca bula nouă să fie
+    // măsurată (mai ales media), țintea o poziție care încă nu exista și lista „fugea" în jos.
+    // Singura sursă de adevăr e onContentSizeChange în ecran: se declanșează exact când conținutul
+    // a crescut și e măsurat. Ecranul marchează „sunt jos" la trimitere, ca să coboare sigur.
     // trimite prin releu (E2E real): 1:1 direct, grupuri prin fan-out pairwise (G3).
     if (!conv.group && plaintext.trim()) {
       await relay.sendText(conv.did, plaintext, id);

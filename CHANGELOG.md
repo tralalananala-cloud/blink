@@ -3,6 +3,47 @@
 Toate schimbările notabile ale Blink. Versionare vizibilă userului; formatul mesajelor **1:1**
 rămâne compatibil între versiuni — **actualizezi fără reinstalare și fără re-scanare QR**.
 
+## [1.5.0] — 2026-07-12 · Bluetooth: mesaje fără internet
+
+Blink poate livra mesaje **direct de la telefon la telefon, prin Bluetooth**, când destinatarul e
+în apropiere. Fără internet, fără releu, fără niciun server. Conținutul rămâne criptat cap-la-cap,
+exact ca prin releu — Bluetooth-ul e doar o altă țeavă prin care trece același plic sigilat.
+
+Testat pe două telefoane în mod avion: text, poze și mesaje vocale ajung, cu bifă dublă.
+
+### Adăugat
+- **Bluetooth în apropiere (experimental)** — se pornește din Setări → Transport. Când destinatarul
+  e în rază, mesajul pleacă prin Bluetooth; dacă nu e, se folosește releul, ca înainte.
+- **Rămâi vizibil și cu aplicația închisă** — un serviciu de fundal (cu notificare permanentă) ține
+  Bluetooth-ul activ, ca să primești mesaje fără să ții aplicația deschisă. Se poate opri: atunci
+  Bluetooth-ul merge doar cât ești în aplicație, iar consumul în buzunar e zero.
+- **Transport Reticulum (experimental)** — rutare printr-un gateway Reticulum în loc de releu.
+
+### Schimbat
+- **Notificările nu mai arată conținutul mesajului.** Implicit scrie doar „Mesaj nou criptat”, ca
+  textul să nu apară pe ecranul blocat. Vrei previzualizarea? O pornești din Setări → Confidențialitate.
+- **Pozele și vocea consumă mult mai puțin** — poze în WebP, voce mono la 32 kbps. O poză trimisă
+  prin Bluetooth a scăzut de la ~300KB la ~65KB, deci ajunge de câteva ori mai repede.
+- Lista de mesaje se deschide la **primul mesaj necitit**, nu la începutul istoricului.
+
+### Reparat
+- Mesajele își păstrează **ordinea** când o coadă de așteptare se golește (la reconectare).
+- Redarea mesajelor vocale, blocată când aplicația rula în fundal.
+- Lista de mesaje sărea la trimitere și rămânea sub tastatură.
+
+### De știut (onest)
+- **NU e o rețea mesh.** Mesajul nu sare din telefon în telefon: destinatarul trebuie să fie el
+  însuși în raza ta Bluetooth. Nu te baza pe el ca pe o rețea rezistentă la cenzură.
+- Cere **v1.5.0 pe ambele telefoane** — nu vorbește cu versiunile mai vechi.
+- Raza e cea a Bluetooth-ului: câțiva metri, o cameră.
+- **Urmă radio:** cât Bluetooth-ul e pornit, telefonul se anunță cu un identificator stabil. Nu-ți
+  dezvăluie identitatea și nu expune mesaje, dar cineva aflat fizic lângă tine, cu un scanner, poate
+  observa că **același telefon** trece pe acolo. Detalii în SECURITY.md.
+- Bluetooth-ul consumă baterie cât e pornit. Ascultăm în ferestre scurte ca să limităm
+  costul, dar nu e gratis.
+- După repornirea telefonului, Bluetooth-ul pornește abia când deschizi aplicația o dată.
+- Ca și până acum: conversațiile 1:1 rămân compatibile — actualizezi peste, fără re-scanare QR.
+
 ## [1.4.0] — 2026-07-07 · Grupuri
 
 Blink are grupuri, cu **exact aceeași criptare ca la 1:1**. Nu e o cheie de grup nouă și

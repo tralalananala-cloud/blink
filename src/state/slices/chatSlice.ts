@@ -13,6 +13,18 @@ import {
 // Rang de stare: o bifă urcă, niciodată nu coboară (sending<sent<relayed<delivered<read).
 const RANK: Record<MsgStatus, number> = { sending: 0, received: 0, sent: 1, relayed: 2, delivered: 3, read: 4 };
 
+/**
+ * Textele notificării discrete. `require` leneș, nu import: i18n-ul trage expo-localization, care
+ * lipsește în jest — iar store-ul trebuie să rămână testabil fără mock-uri de platformă.
+ */
+function notifDict(): { app: string; newEncrypted: string } {
+  try {
+    return require("../../i18n").dictFor().common;
+  } catch {
+    return { app: "Blink", newEncrypted: "New encrypted message" };
+  }
+}
+
 function didId(did: string): string {
   return "d_" + did.replace(/[^a-zA-Z0-9]/g, "").slice(-12);
 }
@@ -38,9 +50,16 @@ export const createChatSlice: Slice<ChatSlice> = (set, get) => ({
       const st = get();
       const conv = st.conversations.find((c) => c.id === convId);
       if (st.settings.notifications && conv) {
-        const body = attachment ? `[${attachment.kind}]` : text;
-        const preview = meta?.senderName ? `${meta.senderName}: ${body}` : body;
-        notifyMessage(conv.name, preview, conv.id);
+        // Mesajul e deja decriptat aici. Dar notificarea se vede pe ecranul BLOCAT, deci implicit
+        // nu scriem nici expeditorul, nici textul — aceeași discreție ca notificarea prin push
+        // (unde releul nu POATE citi conținutul). Cine vrea previzualizare o cere din Settings.
+        if (st.settings.notifPreview) {
+          const body = attachment ? `[${attachment.kind}]` : text;
+          const preview = meta?.senderName ? `${meta.senderName}: ${body}` : body;
+          notifyMessage(conv.name, preview, conv.id);
+        } else {
+          notifyMessage(notifDict().app, notifDict().newEncrypted, conv.id);
+        }
       }
     }
     const id = meta?.id ?? `${convId}-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`;

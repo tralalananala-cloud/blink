@@ -52,7 +52,26 @@ class BleEngine(
     const val TAG = "BlinkBle"
     val SERVICE_UUID: UUID = UUID.fromString("8f3a1c20-6b2d-4e5f-9a71-c4d8e0b15b1e")
     val BLOB_CHAR_UUID: UUID = UUID.fromString("8f3a1c21-6b2d-4e5f-9a71-c4d8e0b15b1e")
-    const val PEER_TTL_MS = 15_000L      // peer nevăzut atât → onPeerLost
+    /**
+     * BLE-4 etapa 3 — scanarea în ferestre (duty-cycle).
+     *
+     * Scanarea continuă ține receptorul radio treaz non-stop: pe A38 s-au măsurat 722s de scanare
+     * din 722s de funcționare, adică 100%. E cel mai scump lucru din mesh, iar advertisingul
+     * celuilalt telefon e oricum PERMANENT — deci nu ratăm pe cineva stând cu urechea ciulită
+     * tot timpul, doar îl găsim cu o fereastră întârziere.
+     *
+     * 6s ascultare / 24s pauză = 20% duty ⇒ de ~5 ori mai puțin timp de radio, la costul unei
+     * latențe de descoperire de cel mult ~30s (o singură dată, la apropiere — după aceea peer-ul
+     * e deja cunoscut și legătura GATT se reface instant).
+     */
+    const val SCAN_WINDOW_MS = 6_000L
+    const val SCAN_IDLE_MS = 24_000L
+    /**
+     * Peer-ul trebuie să supraviețuiască pauzelor dintre ferestre, altfel l-am declara „pierdut"
+     * la fiecare ciclu. 95s ≈ 3 cicluri ratate. Prețul: până la ~95s după ce cineva pleacă din rază
+     * încă îl credem aproape → o trimitere pe BLE eșuează, apoi cade curat pe Reticulum/releu.
+     */
+    const val PEER_TTL_MS = 95_000L      // peer nevăzut atât → onPeerLost
     const val SWEEP_MS = 5_000L
     const val SEND_TIMEOUT_MS = 15_000L  // conectare+scriere; expirat → false (cade pe releu)
     const val MTU_WAIT_MS = 2_500L       // onMtuChanged se pierde pe unele stive → mergem înainte
@@ -98,6 +117,8 @@ class BleEngine(
   private var advertiser: BluetoothLeAdvertiser? = null
   private var scanner: BluetoothLeScanner? = null
   private var gattServer: BluetoothGattServer? = null
+  /** Scanarea e ciclată (fereastră/pauză) — flagul ține evidența, ca să nu dublăm start/stop. */
+  private var scanning = false
 
   // ---------- lifecycle ----------
 
@@ -148,22 +169,73 @@ class BleEngine(
 
     // 3) scanner cu filtru pe serviciul Blink — vedem doar alți useri Blink
     scanner = adapter.bluetoothLeScanner ?: throw IllegalStateException("fara scanner BLE")
+
+    running = true
+    handler.post(scanCycle) // scanarea pornește în ferestre, nu continuu (vezi SCAN_WINDOW_MS)
+    handler.postDelayed(sweep, SWEEP_MS)
+    handler.postDelayed(idleSweep, CONN_SWEEP_MS)
+  }
+
+  @SuppressLint("MissingPermission")
+  private fun startScanNow() {
+    if (scanning || !running) return
+    val s = scanner ?: return
     // două filtre (OR): UUID de serviciu (formatul normal) + service data (formatul compact de fallback)
     val filters = listOf(
       ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE_UUID)).build(),
       ScanFilter.Builder().setServiceData(ParcelUuid(SERVICE_UUID), ByteArray(0)).build(),
     )
     val scanSettings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_BALANCED).build()
-    scanner!!.startScan(filters, scanSettings, scanCallback)
+    try {
+      s.startScan(filters, scanSettings, scanCallback)
+      scanning = true
+    } catch (e: Exception) {
+      Log.w(TAG, "startScan a esuat: ${e.message}")
+    }
+  }
 
-    running = true
-    handler.postDelayed(sweep, SWEEP_MS)
-    handler.postDelayed(idleSweep, CONN_SWEEP_MS)
+  @SuppressLint("MissingPermission")
+  private fun stopScanNow() {
+    if (!scanning) return
+    try { scanner?.stopScan(scanCallback) } catch (_: Exception) {}
+    scanning = false
+  }
+
+  /**
+   * Alternează fereastra de ascultare cu pauza. Cât timp există o legătură GATT (transfer în curs),
+   * scanarea e OPRITĂ complet: nu ne trebuie — peer-ul e deja găsit — iar scanarea fură din același
+   * radio, încetinind exact transferul pe care-l face.
+   */
+  /** Deschide o fereastră de ascultare imediat (cineva vrea să trimită unui peer încă nevăzut). */
+  private fun wakeScan() {
+    if (!running || scanning || conns.isNotEmpty()) return
+    handler.removeCallbacks(scanCycle)
+    startScanNow()
+    handler.postDelayed(scanCycle, SCAN_WINDOW_MS)
+  }
+
+  private val scanCycle = object : Runnable {
+    override fun run() {
+      if (!running) return
+      if (conns.isNotEmpty()) {
+        stopScanNow()
+        handler.postDelayed(this, SCAN_IDLE_MS)
+        return
+      }
+      if (scanning) {
+        stopScanNow()
+        handler.postDelayed(this, SCAN_IDLE_MS)
+      } else {
+        startScanNow()
+        handler.postDelayed(this, SCAN_WINDOW_MS)
+      }
+    }
   }
 
   fun stop() {
     running = false
-    try { scanner?.stopScan(scanCallback) } catch (_: Exception) {}
+    handler.removeCallbacks(scanCycle)
+    stopScanNow()
     try { advertiser?.stopAdvertising(advCallback) } catch (_: Exception) {}
     try { advertiser?.stopAdvertising(advCallbackCompact) } catch (_: Exception) {}
     try { gattServer?.close() } catch (_: Exception) {}
@@ -348,7 +420,14 @@ class BleEngine(
   fun send(did8Hex: String, blobB64: String, done: (Boolean) -> Unit) {
     if (!running) { Log.w(TAG, "send: motor oprit"); return done(false) }
     val known = synchronized(peers) { peers.containsKey(did8Hex) }
-    if (!known) { Log.w(TAG, "send: peer NEcunoscut did8=$did8Hex (peers=${synchronized(peers){peers.keys.toList()}})"); return done(false) }
+    if (!known) {
+      // Cu scanarea în ferestre, peer-ul poate fi în rază dar încă nedescoperit (suntem în pauză).
+      // Trezim radioul ACUM: mesajul pleacă oricum în outbox, iar când scanarea îl vede, onPeerNear
+      // declanșează golirea cozii. Fără asta, prima trimitere ar aștepta degeaba până la 24s.
+      Log.w(TAG, "send: peer NEcunoscut did8=$did8Hex — trezesc scanarea")
+      handler.post { wakeScan() }
+      return done(false)
+    }
     val blob = try { Base64.decode(blobB64, Base64.NO_WRAP) } catch (_: Exception) { return done(false) }
     if (blob.isEmpty() || blob.size > MAX_BLOB) return done(false)
     val payload = ByteBuffer.allocate(4 + blob.size).putInt(blob.size).put(blob).array()

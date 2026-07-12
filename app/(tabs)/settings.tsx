@@ -155,6 +155,17 @@ export default function Settings() {
               relay.refreshBleMesh();
             }}
           />
+          {!!settings.bleMeshEnabled && (
+            <SettingRow
+              title={t.settings.bleMeshBackground}
+              subtitle={t.settings.bleMeshBackgroundBody}
+              value={settings.bleMeshBackground !== false}
+              onValueChange={(v) => {
+                update({ bleMeshBackground: v });
+                relay.refreshBleMesh();
+              }}
+            />
+          )}
         </Card>
 
         {/* Privacy */}
@@ -169,6 +180,14 @@ export default function Settings() {
               if (v) setupNotifications().then((ok) => { if (ok) notifyMessage("Blink", t.settings.notificationsBody); });
             }}
           />
+          {settings.notifications && (
+            <SettingRow
+              title={t.settings.notifPreview}
+              subtitle={t.settings.notifPreviewBody}
+              value={settings.notifPreview}
+              onValueChange={(v) => update({ notifPreview: v })}
+            />
+          )}
           <SettingRow title={t.settings.sealedSender} subtitle={t.settings.sealedSenderBody} value={settings.sealedSender} onValueChange={(v) => update({ sealedSender: v })} />
           <SettingRow title={t.settings.screenshotBlocker} subtitle={t.settings.screenshotBlockerBody} value={settings.screenshotBlocker} onValueChange={setScreenshotBlocker} />
         </Card>

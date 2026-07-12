@@ -19,6 +19,13 @@ export interface Settings {
   selfHostedRelay: boolean;
   biometricLock: boolean;
   notifications: boolean;
+  /**
+   * Arată expeditorul și textul mesajului în notificare. IMPLICIT OPRIT: notificarea se vede pe
+   * ecranul blocat, deci previzualizarea ar scrie conținutul în clar pentru oricine se uită la
+   * telefon — exact ce contrazice restul app-ului (FLAG_SECURE, parole per-conversație).
+   * Oprit → „Mesaj nou criptat”, la fel ca notificarea de push (releul oricum nu poate citi nimic).
+   */
+  notifPreview: boolean;
   /** Numele/pseudonimul tău — apare la ceilalți când le scrii / te adaugă. */
   profileName: string;
   /** Transport Reticulum (experimental): rutează mesajele descentralizat prin gateway. */
@@ -27,6 +34,12 @@ export interface Settings {
   reticulumGateway: string;
   /** Mesh Bluetooth (experimental): livrare directă telefon↔telefon în proximitate (BLE). */
   bleMeshEnabled: boolean;
+  /**
+   * Ține mesh-ul viu și cu app-ul închis (serviciu de foreground + notificare permanentă).
+   * Oprit → mesh-ul merge DOAR cât ții app-ul deschis; în buzunar consumul e zero, dar nu poți
+   * primi nimic prin Bluetooth. Ăsta e compromisul dintre autonomie și „chiar funcționează”.
+   */
+  bleMeshBackground: boolean;
 }
 
 export interface AuthSlice {

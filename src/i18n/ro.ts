@@ -13,6 +13,9 @@ export const ro: Dict = {
     verified: "Verificat",
     unverified: "Neverificat",
     close: "Închide",
+    /** Notificare discretă (implicit): fără expeditor, fără conținut — ecranul blocat rămâne mut. */
+    app: "Blink",
+    newEncrypted: "Mesaj nou criptat",
   },
   verify: {
     title: "Verifică-l pe",
@@ -82,7 +85,7 @@ export const ro: Dict = {
   peer: {
     direct: "P2P direct",
     relay: "Prin releu",
-    mesh: "Mesh Bluetooth",
+    mesh: "Bluetooth (în apropiere)",
     offline: "Offline",
   },
   friends: {
@@ -169,10 +172,12 @@ export const ro: Dict = {
     p2p: "Releu criptat",
     soon: "🔜",
     tor: "Tor (mai lent, mai privat)",
-    mesh: "Mesh Bluetooth (offline)",
+    mesh: "Bluetooth (în apropiere, offline)",
     privacy: "Confidențialitate",
     notifications: "Notificări",
     notificationsBody: "Primești o notificare când vine un mesaj.",
+    notifPreview: "Arată conținutul în notificare",
+    notifPreviewBody: "Implicit, notificarea spune doar „Mesaj nou criptat”, ca textul să nu apară pe ecranul blocat. Pornește doar dacă ești de acord ca expeditorul și mesajul să fie vizibile cuiva care se uită la telefonul tău.",
     sealedSender: "Expeditor ascuns",
     sealedSenderBody: "Ascunde de relee cine a trimis mesajul.",
     screenshotBlocker: "Blochează capturile",
@@ -184,8 +189,13 @@ export const ro: Dict = {
     reticulumGateway: "Adresa gateway-ului",
     reticulumGatewayPlaceholder: "https://gateway-ul-tău…",
     reticulumOnNoAddr: "Pune întâi adresa unui gateway.",
-    bleMesh: "Mesh Bluetooth (experimental)",
-    bleMeshBody: "Trimite mesajele direct telefon↔telefon prin Bluetooth când destinatarul e în apropiere — fără internet, fără servere. Conținutul rămâne criptat cap-la-cap. Necesită o versiune de app cu suport BLE.",
+    bleMesh: "Bluetooth în apropiere (experimental)",
+    bleMeshBody: "Livrează mesajele direct telefon↔telefon prin Bluetooth, când destinatarul e la câțiva metri de tine — fără internet, fără servere. Conținutul rămâne criptat cap-la-cap. NU e o rețea care sare din telefon în telefon: destinatarul trebuie să fie el însuși în rază. Cere aceeași versiune de app pe ambele telefoane.",
+    bleMeshBackground: "Rămâi vizibil și cu app-ul închis",
+    bleMeshBackgroundBody: "Ține Bluetooth-ul activ în fundal, cu o notificare permanentă, ca să primești mesaje fără să deschizi app-ul. Consumă baterie: radioul ascultă în ferestre scurte (6s la fiecare 30s) și se anunță continuu. Oprit → mesh-ul merge doar cât ții Blink deschis.",
+    // Notificarea permanentă a serviciului de foreground — sistemul o cere ca să nu ne omoare procesul.
+    bleMeshNotifTitle: "Blink — Bluetooth activ",
+    bleMeshNotifBody: "Rămâi vizibil pentru telefoanele din apropiere, fără internet.",
     profile: "Profil",
     profileBody: "Numele tău apare la cei cărora le scrii sau care te adaugă.",
     profilePlaceholder: "Numele tău sau un pseudonim",

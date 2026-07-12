@@ -9,6 +9,21 @@
       android:usesPermissionFlags="neverForLocation" tools:targetApi="s" />
   <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
   <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+  <!-- BLE-4: serviciul de foreground ține mesh-ul viu cu app-ul închis. Fără el, sistemul îngheață
+       procesul și telefonul devine invizibil la scanare. Tipul „connectedDevice” e obligatoriu pe
+       API 34+; notificarea permanentă cere POST_NOTIFICATIONS pe Android 13+. -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
   <!-- BLE opțional: app-ul merge și pe device fără BLE (transportul rămâne oprit) -->
   <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+
+  <application>
+    <service
+        android:name=".BleService"
+        android:exported="false"
+        android:foregroundServiceType="connectedDevice" />
+  </application>
 </manifest>

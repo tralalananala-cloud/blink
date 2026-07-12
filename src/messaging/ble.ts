@@ -18,6 +18,20 @@ const toHex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2,
 /** Identificatorul BLE al unui DID (8 octeți hex din SHA-256). */
 export const did8 = (did: string): string => toHex(hash(utf8(did)).slice(0, 8));
 
+/**
+ * Textele notificării permanente a serviciului de foreground (BLE-4). `require` leneș, nu import:
+ * i18n-ul trage expo-localization, care nu există în jest — iar transportul trebuie să rămână
+ * testabil fără mock-uri de platformă. Fără dicționar → engleză, nu crăpăm.
+ */
+function notifStrings(): { title: string; body: string } {
+  try {
+    const t = require("../i18n").dictFor().settings;
+    return { title: t.bleMeshNotifTitle, body: t.bleMeshNotifBody };
+  } catch {
+    return { title: "Blink — Bluetooth mesh on", body: "Staying reachable to nearby phones, with no internet." };
+  }
+}
+
 class BleMeshTransport {
   private native: BleNative | null | undefined; // undefined = încă neîncărcat (lazy, o dată)
   private nearby = new Set<string>(); // did8-urile peer-ilor văzuți acum în raza Bluetooth
@@ -60,7 +74,8 @@ class BleMeshTransport {
         try { this.onPeerNear?.(); } catch {}
       }));
       this.subs.push(n.addListener("onPeerLost", (e) => { if (e.did8) this.nearby.delete(e.did8); }));
-      await n.start(did8(myDid));
+      const { title, body } = notifStrings();
+      await n.start(did8(myDid), title, body);
       this.started = true;
       console.log("[BLE] transport pornit, did8 propriu:", did8(myDid));
     } catch {

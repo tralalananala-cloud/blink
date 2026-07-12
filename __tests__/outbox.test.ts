@@ -21,16 +21,36 @@ afterEach(() => { jest.clearAllTimers(); jest.useRealTimers(); });
 const tick = async (ms: number) => { jest.advanceTimersByTime(ms); for (let i = 0; i < 6; i++) await Promise.resolve(); };
 
 describe("outbox — coada de (re)trimitere", () => {
-  it("queueOut dedupe după id; flush trimite tot o dată", () => {
+  it("queueOut dedupe după id; flush trimite tot o dată", async () => {
     const { ob, deps } = make();
     ob.queueOut({ to: "p", kind: "text", text: "a", id: "m1" });
     ob.queueOut({ to: "p", kind: "text", text: "a", id: "m1" }); // dublură
     ob.queueOut({ to: "p", kind: "media", att: { uri: "u" } as any, id: "m2" });
-    ob.flush();
+    await ob.flush();
     expect(deps.sendText).toHaveBeenCalledTimes(1);
     expect(deps.sendMedia).toHaveBeenCalledTimes(1);
-    ob.flush(); // coada e goală acum
+    await ob.flush(); // coada e goală acum
     expect(deps.sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it("flush trimite SERIAL, în ordinea cozii (altfel conversația se încurcă la receptor)", async () => {
+    const order: string[] = [];
+    const deps = {
+      isConnected: () => true,
+      // m1 e „lent" (mai multe microtask-uri, ca o criptare mai grea). În paralel, m2 l-ar depăși;
+      // serial, ordinea cozii e păstrată. Fără setTimeout: suita rulează pe timere false.
+      sendText: jest.fn(async (_to: string, _t: string, id: string) => {
+        if (id === "m1") for (let i = 0; i < 5; i++) await Promise.resolve();
+        order.push(id);
+      }),
+      sendMedia: jest.fn(async () => {}),
+      trySendAck: jest.fn(async () => true),
+    };
+    const ob = new Outbox(deps);
+    ob.queueOut({ to: "p", kind: "text", text: "1", id: "m1" });
+    ob.queueOut({ to: "p", kind: "text", text: "2", id: "m2" });
+    await ob.flush();
+    expect(order).toEqual(["m1", "m2"]);
   });
 });
 

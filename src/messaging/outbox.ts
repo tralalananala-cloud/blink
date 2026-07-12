@@ -42,14 +42,32 @@ export class Outbox {
     if (!this.outbox.some((x) => x.id === item.id)) this.outbox.push(item);
   }
 
-  /** Golește coada de așteptare — re-trimite tot (la reconectare/reg confirmat). */
-  flush() {
-    if (!this.outbox.length) return;
-    const items = this.outbox;
-    this.outbox = [];
-    for (const it of items) {
-      if (it.kind === "text") void this.deps.sendText(it.to, it.text!, it.id);
-      else if (it.att) void this.deps.sendMedia(it.to, it.att, it.id);
+  /**
+   * Golește coada de așteptare — re-trimite tot (la reconectare / peer BLE în rază).
+   *
+   * SERIALIZAT, nu în paralel. Varianta veche dădea drumul la toate mesajele deodată (`void
+   * sendText(...)` în buclă); fiecare trece prin criptare asincronă, care nu durează la fel pentru
+   * toate, așa că ajungeau la transport în altă ordine decât le-ai scris. Receptorul le ștampilează
+   * cu ORA SOSIRII (`ts: Date.now()`), deci ordinea greșită se vedea direct în conversație — și
+   * exact la prima golire a cozii, adică „la început se încurcă, apoi merge".
+   */
+  private flushing = false;
+
+  async flush(): Promise<void> {
+    if (this.flushing || !this.outbox.length) return;
+    this.flushing = true;
+    try {
+      while (this.outbox.length) {
+        const it = this.outbox.shift()!;
+        try {
+          if (it.kind === "text") await this.deps.sendText(it.to, it.text!, it.id);
+          else if (it.att) await this.deps.sendMedia(it.to, it.att, it.id);
+        } catch {
+          // Eșecul unui mesaj NU blochează coada: rămâne urmărit de pendingAck → resend la timeout.
+        }
+      }
+    } finally {
+      this.flushing = false;
     }
   }
 

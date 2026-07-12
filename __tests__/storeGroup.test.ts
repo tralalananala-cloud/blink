@@ -91,9 +91,18 @@ describe("receiveGroupMessage — recepție gt", () => {
     expect(conv("g_x3")).toBeUndefined();
     useApp.setState({ blocked: [] });
   });
-  it("notificarea de grup prefixează numele expeditorului", () => {
+  it("implicit notificarea NU scurge conținut (ecran blocat) — doar „mesaj nou criptat”", () => {
     st().receiveGroupMessage(ANA, "g_x4", "hei", "r2", undefined, "Ana", "Gașca");
-    expect(notifyMessage).toHaveBeenCalledWith("Gașca", "Ana: hei", "g_x4");
+    const [title, body] = (notifyMessage as jest.Mock).mock.calls.at(-1)!;
+    expect(body).not.toContain("hei");
+    expect(title).not.toContain("Gașca");
+  });
+
+  it("cu notifPreview pornit, notificarea de grup prefixează numele expeditorului", () => {
+    useApp.setState({ settings: { ...useApp.getState().settings, notifPreview: true } });
+    st().receiveGroupMessage(ANA, "g_x5", "hei", "r3", undefined, "Ana", "Gașca");
+    expect(notifyMessage).toHaveBeenCalledWith("Gașca", "Ana: hei", "g_x5");
+    useApp.setState({ settings: { ...useApp.getState().settings, notifPreview: false } });
   });
 });
 

@@ -1,7 +1,10 @@
 # Blink
 
-> Messenger **end-to-end criptat** — **Android**. Azi rulează printr-un **releu unic**
-> (Cloudflare) care nu poate citi nimic; descentralizarea reală (multi-releu / mesh) e pe roadmap.
+> Messenger **end-to-end criptat** — **Android**. Calea implicită e un **releu unic** (Cloudflare)
+> care nu poate citi nimic. De la v1.5.0 există și două căi care NU trec prin el, ambele
+> experimentale și oprite implicit: **Bluetooth în apropiere** (livrare directă când destinatarul e
+> la câțiva metri — NU e mesh, nu există multi-hop) și **Reticulum** (rutare printr-un gateway).
+> Descentralizarea reală (multi-releu) rămâne pe roadmap.
 > Estetică cypherpunk dark-first. React Native + Expo.
 
 Blink criptează conținutul mesajelor cap-la-cap cu **libsignal** (motorul oficial Signal):
@@ -26,8 +29,9 @@ Fluxul complet (handshake → mesaje text/media/voce → bife → persistență 
 | Sealed sender (releul nu vede expeditorul) | Grupuri **MLS** |
 | Releu Cloudflare orb + auth challenge-response (Ed25519) | **Desktop** (Electron) — parcat, fără libsignal nativ |
 | At-rest (Android): SQLite cu **conținut criptat per-mesaj** (ChaCha20-Poly1305), chei în Keystore; SQLCipher pe tot fișierul = planificat | **iOS** (necesită cont Apple + tuning CocoaPods) |
-| Identitate DID:key + frază de recuperare BIP39 + safety number anti-MITM | Transport peste **Tor / I2P / Reticulum** |
+| Identitate DID:key + frază de recuperare BIP39 + safety number anti-MITM | Transport peste **Tor / I2P**; **multi-hop** pe Bluetooth |
 | Text, poze, video, fișiere, note vocale; edit/delete; teme; app-lock + parolă per-conv | F-Droid / push fără Google |
+| **Bluetooth în apropiere** + **Reticulum** (experimentale, opt-in) — v1.5.0 | Rotația identificatorului BLE (azi e stabil → urmă radio locală, vezi SECURITY.md) |
 
 **Cheie de design:** tot UI-ul vorbește cu interfața `CryptoEngine` (`src/crypto/types.ts`) —
 niciun ecran nu atinge primitive criptografice direct. Există **un singur motor pe sârmă**:

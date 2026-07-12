@@ -243,6 +243,7 @@ class Relay {
   // Idempotent (bleMesh.start are guard propriu); blob-urile primite intră pe același handle()
   // ca cele de pe releu/Reticulum (format identic {t:"msg",env}).
   private bleUp = false;
+  private bleAppStateWired = false;
   private async ensureBleMesh(): Promise<void> {
     const did = this.myDid();
     if (!did || !bleMesh.on() || this.bleUp) return;
@@ -260,6 +261,28 @@ class Relay {
       // și ține sweep-ul de resend viu chiar dacă WS-ul releului n-a pornit niciodată.
       bleMesh.onPeerNear = () => { this.outboxMgr.startSweep(); this.outboxMgr.flush(); };
       if (bleMesh.anyNearby()) { this.outboxMgr.startSweep(); this.outboxMgr.flush(); }
+      this.wireBleAppState();
+    }
+  }
+
+  /**
+   * Mesh doar cât e app-ul deschis, dacă userul nu vrea serviciul permanent (Settings →
+   * „mesh în fundal"). Fără asta, radioul ar face advertising+scanare 24/7 în buzunar, iar
+   * singurul indiciu ar fi bateria topită. Cu toggle-ul pornit nu facem nimic aici: serviciul
+   * de foreground se ocupă (ăsta e tot rostul lui).
+   */
+  private wireBleAppState(): void {
+    if (this.bleAppStateWired) return;
+    this.bleAppStateWired = true;
+    try {
+      const { AppState } = require("react-native");
+      AppState.addEventListener("change", (s: string) => {
+        if (useApp.getState().settings.bleMeshBackground) return;
+        if (s === "active") { void this.ensureBleMesh(); }
+        else { bleMesh.reset(); this.bleUp = false; }
+      });
+    } catch {
+      /* fără AppState (test/web) → mesh-ul rămâne cum e */
     }
   }
 

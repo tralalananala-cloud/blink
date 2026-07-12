@@ -79,7 +79,13 @@ describe("descoperire + recepție", () => {
   it("start anunță did8-ul propriu; onPeerSeen/onPeerLost mișcă canReach", async () => {
     const { bleMesh, did8 } = fresh();
     expect(await bleMesh.start("did:key:me", () => {})).toBe(true);
-    expect(mockNative.start).toHaveBeenCalledWith(did8("did:key:me"));
+    // BLE-4: start primește și textele notificării serviciului de foreground. Nu fixăm conținutul
+    // (vine din i18n), dar NU are voie să fie gol — o notificare fără text = serviciu respins de Android.
+    expect(mockNative.start).toHaveBeenCalledWith(
+      did8("did:key:me"),
+      expect.stringMatching(/\S/),
+      expect.stringMatching(/\S/),
+    );
     expect(bleMesh.canReach("did:key:peer")).toBe(false);
     emit("onPeerSeen", { did8: did8("did:key:peer") });
     expect(bleMesh.canReach("did:key:peer")).toBe(true);

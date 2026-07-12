@@ -75,6 +75,26 @@ export default function Conversation() {
   // true cât timp utilizatorul e jos de tot; doar atunci auto-derulăm la fund (la mesaj nou /
   // deschiderea tastaturii). Altfel, dacă a derulat în sus să citească istoricul, NU-l mai smucim.
   const atBottomRef = useRef(true);
+  // Câte necitite erau ÎN MOMENTUL deschiderii. clearUnread() le șterge într-un efect imediat după
+  // primul render, deci valoarea trebuie prinsă ACUM, cât încă există.
+  const unreadAtOpen = useRef<number | null>(null);
+  if (unreadAtOpen.current === null && conv) unreadAtOpen.current = conv.unread;
+
+  // Lista e inversată: index 0 = cel mai NOU mesaj (desenat jos). Copiem, nu mutăm — reverse()
+  // modifică pe loc, iar array-ul vine din store.
+  const msgsNewestFirst = React.useMemo(
+    () => (conv ? [...conv.messages].reverse() : []),
+    [conv?.messages]
+  );
+
+  // Aterizare la deschidere: dacă ai N necitite, ele sunt indexii 0..N-1 (cele mai noi). Pornim de
+  // la CEL MAI VECHI necitit (N-1), ca să le citești în ordine, derulând în jos spre prezent.
+  // Fără necitite → 0 = jos, la ultimul mesaj (comportamentul implicit al listei inversate).
+  const initialIndex = React.useMemo(() => {
+    const n = unreadAtOpen.current ?? 0;
+    if (n <= 0 || n > msgsNewestFirst.length) return 0;
+    return n - 1;
+  }, [msgsNewestFirst.length]);
 
   // Hook-uri cu stare (Faza 3.3 finalizare) — apelate ÎNAINTE de orice early return.
   const chat = useChatMessages(conv, { listRef, inputRef, setEmoji, setMenuMsg, setSession });
@@ -94,6 +114,11 @@ export default function Conversation() {
     });
     return () => { active = false; };
   }, [conv?.id]);
+
+  // Tastatura: `windowSoftInputMode=adjustResize` micșorează singur fereastra, deci NU compensăm
+  // manual — o încercare anterioară adăuga înălțimea tastaturii peste redimensionarea sistemului
+  // și lăsa un gol cât încă o tastatură. Singurul lucru care lipsea era derularea la ultimul
+  // mesaj după re-măsurare, și aia se face în `onLayout`-ul listei (vezi mai jos).
 
   // confirmări de citire (✓✓ colorat la expeditor): la deschidere + la mesaje noi
   useEffect(() => {
@@ -268,20 +293,37 @@ export default function Conversation() {
         ) : null}
 
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+          {/*
+            Listă INVERSATĂ (ca Messenger/WhatsApp/Signal). Cel mai nou mesaj e la index 0 și e
+            desenat jos, lipit de bara de scris — ancorarea o face lista, nativ.
+
+            Înainte încercam să ținem fundul cu scrollToEnd la fiecare schimbare de conținut sau de
+            înălțime. Nu poate fi corect: derularea se calcula pe măsurători care încă nu erau
+            actualizate (bula nouă nemăsurată, tastatura la jumătatea animației), deci lista sărea
+            peste fund. Inversată, nu mai există nimic de corectat: „jos" e originea, nu o țintă.
+          */}
           <FlatList
             ref={listRef}
-            data={conv.messages}
+            inverted
+            data={msgsNewestFirst}
             keyExtractor={(m) => m.id}
             renderItem={({ item }) => <MessageBubble msg={item} onLongPress={setMenuMsg} />}
             contentContainerStyle={styles.list}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
-            onScroll={(e) => {
-              const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
-              atBottomRef.current = contentOffset.y + layoutMeasurement.height >= contentSize.height - 80;
-            }}
+            // Într-o listă inversată, offset 0 ESTE fundul (mesajele noi). Ține sus = citește istoric.
+            onScroll={(e) => { atBottomRef.current = e.nativeEvent.contentOffset.y <= 80; }}
             scrollEventThrottle={16}
-            onContentSizeChange={() => { if (atBottomRef.current) listRef.current?.scrollToEnd({ animated: false }); }}
+            // Deschidere cu necitite: sări la cel mai vechi necitit, ca să le citești în ordine.
+            // Fără necitite nu facem nimic — lista e deja jos, prin construcție.
+            initialScrollIndex={initialIndex}
+            onScrollToIndexFailed={(info) => {
+              // Bulele au înălțimi variabile (poze, voce) → indexul poate să nu fie încă măsurat.
+              listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
+              setTimeout(() => {
+                listRef.current?.scrollToIndex({ index: info.index, animated: false });
+              }, 80);
+            }}
             initialNumToRender={15}
             maxToRenderPerBatch={10}
             windowSize={11}
@@ -321,7 +363,15 @@ export default function Conversation() {
             paddingBottom={emoji ? space.sm : insets.bottom + space.sm}
             onToggleAttach={toggleAttach}
             onToggleEmoji={toggleEmoji}
-            onSend={chat.sendText}
+            // Trimiți → vrei să vezi ce ai trimis, chiar dacă tocmai citeai istoricul mai sus.
+            // Marcăm „sunt jos", iar onContentSizeChange coboară lista când bula e măsurată.
+            // Trimiți → vrei să vezi ce ai trimis, chiar dacă tocmai citeai istoricul mai sus.
+            // În lista inversată, „jos" = offset 0.
+            onSend={() => {
+              atBottomRef.current = true;
+              listRef.current?.scrollToOffset({ offset: 0, animated: true });
+              chat.sendText();
+            }}
             onToggleVoice={media.toggleVoice}
           />
           )}

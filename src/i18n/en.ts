@@ -11,6 +11,9 @@ export const en = {
     verified: "Verified",
     unverified: "Unverified",
     close: "Close",
+    /** Discreet notification (default): no sender, no content — the lock screen stays blank. */
+    app: "Blink",
+    newEncrypted: "New encrypted message",
   },
   verify: {
     title: "Verify",
@@ -80,7 +83,7 @@ export const en = {
   peer: {
     direct: "Direct P2P",
     relay: "Via relay",
-    mesh: "Bluetooth mesh",
+    mesh: "Bluetooth (nearby)",
     offline: "Offline",
   },
   friends: {
@@ -167,10 +170,12 @@ export const en = {
     p2p: "Encrypted relay",
     soon: "🔜",
     tor: "Tor (slower, more private)",
-    mesh: "Bluetooth mesh (offline)",
+    mesh: "Bluetooth (nearby, offline)",
     privacy: "Privacy",
     notifications: "Notifications",
     notificationsBody: "Get a notification when a message arrives.",
+    notifPreview: "Show content in notifications",
+    notifPreviewBody: "By default the notification only says “New encrypted message”, so nothing appears on your lock screen. Turn this on only if you're fine with the sender and the message being visible to anyone glancing at your phone.",
     sealedSender: "Sealed sender",
     sealedSenderBody: "Hide who sent the message from relays.",
     screenshotBlocker: "Screenshot blocker",
@@ -182,8 +187,13 @@ export const en = {
     reticulumGateway: "Gateway address",
     reticulumGatewayPlaceholder: "https://your-gateway…",
     reticulumOnNoAddr: "Set a gateway address first.",
-    bleMesh: "Bluetooth mesh (experimental)",
-    bleMeshBody: "Deliver messages phone-to-phone over Bluetooth when the recipient is nearby — no internet, no servers. Content stays end-to-end encrypted. Requires an app build with BLE support.",
+    bleMesh: "Nearby Bluetooth (experimental)",
+    bleMeshBody: "Deliver messages phone-to-phone over Bluetooth when the recipient is within a few metres — no internet, no servers. Content stays end-to-end encrypted. This is NOT a network that hops between phones: the recipient must be in range themselves. Both phones need the same app version.",
+    bleMeshBackground: "Stay reachable when the app is closed",
+    bleMeshBackgroundBody: "Keeps Bluetooth alive in the background, with an ongoing notification, so you receive messages without opening the app. It costs battery: the radio listens in short windows (6s every 30s) and advertises continuously. Off → mesh only works while Blink is open.",
+    // Ongoing notification for the foreground service — Android demands it to keep the process alive.
+    bleMeshNotifTitle: "Blink — Bluetooth on",
+    bleMeshNotifBody: "Staying reachable to nearby phones, with no internet.",
     profile: "Profile",
     profileBody: "Your name shows to people you message or who add you.",
     profilePlaceholder: "Your name or alias",
