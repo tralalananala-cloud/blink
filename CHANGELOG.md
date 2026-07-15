@@ -3,6 +3,21 @@
 All notable changes to Blink. User-visible versioning; the **1:1** message format stays
 compatible across versions — **you update without reinstalling and without re-scanning a QR code**.
 
+## [1.5.1] — 2026-07-15 · Bluetooth reliability + Reticulum in the background
+
+Fixes and refinements on top of 1.5.0. No wire-format change — you update on top, keep your
+identity and conversations, no QR re-scan.
+
+### Fixed
+- **Nearby Bluetooth recovers on its own after airplane mode or toggling Bluetooth.** Before, when
+  the radio was cycled the mesh went silent — the phone stayed invisible until you reopened the
+  app (one direction stuck at a single check). It now restarts itself as soon as Bluetooth is back.
+
+### Changed
+- **Reticulum (experimental) now receives messages with the app closed.** The background polling
+  moved to a native thread, so it keeps running even when the app has no screen open — previously a
+  Reticulum message only arrived once you reopened Blink. Still opt-in and off by default.
+
 ## [1.5.0] — 2026-07-12 · Bluetooth: messages without internet
 
 Blink can deliver messages **directly phone-to-phone, over Bluetooth**, when the recipient is

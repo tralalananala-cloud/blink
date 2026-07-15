@@ -3,7 +3,7 @@
     "name": "Blink",
     "slug": "blink",
     "owner": "user-tralala",
-    "version": "1.5.0",
+    "version": "1.5.1",
     "scheme": "blink",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
@@ -31,7 +31,7 @@
     },
     "android": {
       "package": "io.blink.app",
-      "versionCode": 13,
+      "versionCode": 14,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
