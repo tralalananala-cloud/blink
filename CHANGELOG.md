@@ -1,108 +1,110 @@
 # Changelog
 
-Toate schimbările notabile ale Blink. Versionare vizibilă userului; formatul mesajelor **1:1**
-rămâne compatibil între versiuni — **actualizezi fără reinstalare și fără re-scanare QR**.
+All notable changes to Blink. User-visible versioning; the **1:1** message format stays
+compatible across versions — **you update without reinstalling and without re-scanning a QR code**.
 
-## [1.5.0] — 2026-07-12 · Bluetooth: mesaje fără internet
+## [1.5.0] — 2026-07-12 · Bluetooth: messages without internet
 
-Blink poate livra mesaje **direct de la telefon la telefon, prin Bluetooth**, când destinatarul e
-în apropiere. Fără internet, fără releu, fără niciun server. Conținutul rămâne criptat cap-la-cap,
-exact ca prin releu — Bluetooth-ul e doar o altă țeavă prin care trece același plic sigilat.
+Blink can deliver messages **directly phone-to-phone, over Bluetooth**, when the recipient is
+nearby. No internet, no relay, no server at all. Content stays end-to-end encrypted, exactly like
+over the relay — Bluetooth is just another pipe the same sealed envelope travels through.
 
-Testat pe două telefoane în mod avion: text, poze și mesaje vocale ajung, cu bifă dublă.
+Tested on two phones in airplane mode: text, photos and voice messages arrive, with a double check.
 
-### Adăugat
-- **Bluetooth în apropiere (experimental)** — se pornește din Setări → Transport. Când destinatarul
-  e în rază, mesajul pleacă prin Bluetooth; dacă nu e, se folosește releul, ca înainte.
-- **Rămâi vizibil și cu aplicația închisă** — un serviciu de fundal (cu notificare permanentă) ține
-  Bluetooth-ul activ, ca să primești mesaje fără să ții aplicația deschisă. Se poate opri: atunci
-  Bluetooth-ul merge doar cât ești în aplicație, iar consumul în buzunar e zero.
-- **Transport Reticulum (experimental)** — rutare printr-un gateway Reticulum în loc de releu.
+### Added
+- **Nearby Bluetooth (experimental)** — turned on from Settings → Transport. When the recipient
+  is in range, the message goes over Bluetooth; if not, it falls back to the relay, as before.
+- **Stay reachable even with the app closed** — a background service (with a persistent
+  notification) keeps Bluetooth active so you receive messages without keeping the app open. It
+  can be turned off: then Bluetooth only runs while you're in the app, and battery cost in your
+  pocket is zero.
+- **Reticulum transport (experimental)** — routing through a Reticulum gateway instead of the relay.
 
-### Schimbat
-- **Notificările nu mai arată conținutul mesajului.** Implicit scrie doar „Mesaj nou criptat”, ca
-  textul să nu apară pe ecranul blocat. Vrei previzualizarea? O pornești din Setări → Confidențialitate.
-- **Pozele și vocea consumă mult mai puțin** — poze în WebP, voce mono la 32 kbps. O poză trimisă
-  prin Bluetooth a scăzut de la ~300KB la ~65KB, deci ajunge de câteva ori mai repede.
-- Lista de mesaje se deschide la **primul mesaj necitit**, nu la începutul istoricului.
+### Changed
+- **Notifications no longer show message content.** By default they read only "New encrypted
+  message", so text doesn't appear on the lock screen. Want the preview? Turn it on in
+  Settings → Privacy.
+- **Photos and voice use much less data** — photos in WebP, voice mono at 32 kbps. A photo sent
+  over Bluetooth dropped from ~300KB to ~65KB, so it arrives several times faster.
+- The message list opens at the **first unread message**, not at the start of history.
 
-### Reparat
-- Mesajele își păstrează **ordinea** când o coadă de așteptare se golește (la reconectare).
-- Redarea mesajelor vocale, blocată când aplicația rula în fundal.
-- Lista de mesaje sărea la trimitere și rămânea sub tastatură.
+### Fixed
+- Messages keep their **order** when a waiting queue drains (on reconnect).
+- Voice message playback, which was blocked while the app ran in the background.
+- The message list jumping on send and staying hidden under the keyboard.
 
-### De știut (onest)
-- **NU e o rețea mesh.** Mesajul nu sare din telefon în telefon: destinatarul trebuie să fie el
-  însuși în raza ta Bluetooth. Nu te baza pe el ca pe o rețea rezistentă la cenzură.
-- Cere **v1.5.0 pe ambele telefoane** — nu vorbește cu versiunile mai vechi.
-- Raza e cea a Bluetooth-ului: câțiva metri, o cameră.
-- **Urmă radio:** cât Bluetooth-ul e pornit, telefonul se anunță cu un identificator stabil. Nu-ți
-  dezvăluie identitatea și nu expune mesaje, dar cineva aflat fizic lângă tine, cu un scanner, poate
-  observa că **același telefon** trece pe acolo. Detalii în SECURITY.md.
-- Bluetooth-ul consumă baterie cât e pornit. Ascultăm în ferestre scurte ca să limităm
-  costul, dar nu e gratis.
-- După repornirea telefonului, Bluetooth-ul pornește abia când deschizi aplicația o dată.
-- Ca și până acum: conversațiile 1:1 rămân compatibile — actualizezi peste, fără re-scanare QR.
+### Good to know (honest)
+- **It is NOT a mesh network.** A message does not hop phone to phone: the recipient must be in
+  your own Bluetooth range. Don't rely on it as a censorship-resistant network.
+- Requires **v1.5.0 on both phones** — it does not talk to older versions.
+- The range is Bluetooth range: a few meters, one room.
+- **Radio trace:** while Bluetooth is on, the phone advertises itself with a stable identifier. It
+  does not reveal your identity and does not expose messages, but someone physically near you with
+  a scanner can notice that the **same phone** passes by. Details in SECURITY.md.
+- Bluetooth uses battery while it's on. We listen in short windows to limit the cost, but it isn't
+  free.
+- After a phone reboot, Bluetooth only starts once you open the app.
+- As before: 1:1 conversations stay compatible — you update on top, no QR re-scan.
 
-## [1.4.0] — 2026-07-07 · Grupuri
+## [1.4.0] — 2026-07-07 · Groups
 
-Blink are grupuri, cu **exact aceeași criptare ca la 1:1**. Nu e o cheie de grup nouă și
-neverificată: fiecare mesaj de grup pleacă **cifrat individual (libsignal) către fiecare membru**
-— aceleași garanții pe care le ai deja în conversațiile față-în-față.
+Blink has groups, with **exactly the same encryption as 1:1**. It is not a new, unverified group
+key: each group message goes out **individually encrypted (libsignal) to each member** — the same
+guarantees you already have in face-to-face conversations.
 
-### Adăugat
-- **Grupuri criptate cap-la-cap.** Creezi un grup, adaugi membri din contacte, scrii text și
-  trimiți poze — totul E2EE. Pe fiecare mesaj vezi cine l-a trimis. Bifa **✓✓** apare când
-  **toți** membrii au confirmat primirea.
-- **Administrare grup.** Creatorul e admin: adaugă și scoate membri. Oricine poate **părăsi**
-  grupul; ceilalți sunt anunțați, iar istoricul rămâne pe dispozitivul tău.
+### Added
+- **End-to-end encrypted groups.** You create a group, add members from contacts, write text and
+  send photos — all E2EE. On each message you see who sent it. The **✓✓** check appears when
+  **all** members have confirmed receipt.
+- **Group administration.** The creator is the admin: adds and removes members. Anyone can **leave**
+  the group; the others are notified, and history stays on your device.
 
-### Onestitate
-- **Nu e „descentralizat" și releul vede volumul.** Un mesaj de grup = N trimiteri 1:1 prin
-  releul orb. Releul **nu vede conținutul** (e cifrat), dar vede că ai trimis N plicuri — adică
-  **cât de mare e grupul**, nu ce scrii. Onest față de metadate.
-- **Toți membrii au nevoie de v1.4+.** Formatul de grup e nou. Un prieten pe o versiune mai
-  veche **nu poate participa** la grup — îi va apărea mesajul greșit (ca text tehnic într-o
-  conversație separată). Trimite-le linkul de actualizare înainte să-i adaugi.
-- **Fără MLS, fără chei de grup.** Am ales fan-out 1:1 tocmai ca să nu introducem criptografie
-  nouă. Compromisul: e eficient pentru grupuri mici (până la 16 membri), nu pentru sute.
+### Honesty
+- **It is not "decentralized" and the relay sees the volume.** A group message = N 1:1 sends
+  through the blind relay. The relay **does not see the content** (it's encrypted), but it sees you
+  sent N envelopes — that is, **how big the group is**, not what you write. Honest about metadata.
+- **All members need v1.4+.** The group format is new. A friend on an older version **cannot
+  participate** in the group — the message will appear wrong to them (as technical text in a
+  separate conversation). Send them the update link before adding them.
+- **No MLS, no group keys.** We chose 1:1 fan-out precisely to avoid introducing new cryptography.
+  The trade-off: it is efficient for small groups (up to 16 members), not for hundreds.
 
-### Note
-- **1:1 rămâne fără re-pair.** Conversațiile față-în-față folosesc același format ca înainte —
-  actualizezi peste versiunea veche, îți păstrezi identitatea și conversațiile. Doar **grupurile**
-  cer ca toți să fie pe v1.4+.
+### Notes
+- **1:1 stays re-pair-free.** Face-to-face conversations use the same format as before — you
+  update on top of the old version, keeping your identity and conversations. Only **groups**
+  require everyone to be on v1.4+.
 
-## [1.2.2] — 2026-07-04 · Stabilitate 1:1
+## [1.2.2] — 2026-07-04 · 1:1 stability
 
-Un lot dedicat stabilității unei conversații 1:1: notificări calme, poze mai rapide și fără
-scurgere de locație, ștergere la ambii și zero butoane moarte. Fără schimbări pe rețea →
-**update fără re-pair**.
+A batch dedicated to the stability of a 1:1 conversation: calm notifications, faster photos with
+no location leak, delete-for-both, and zero dead buttons. No network changes →
+**update without re-pair**.
 
-### Îmbunătățit
-- **Notificări calme.** Cu app-ul închis, primești **o singură** notificare „Mesaj nou
-  criptat", nu un teanc — indiferent câte mesaje sau bucăți de poză sosesc, și de la oricâți
-  expeditori. Sunetul te anunță o dată, nu în buclă. (Conținutul e tot acolo când deschizi.)
-- **Poze mai rapide și fără locație.** Pozele sunt redimensionate automat înainte de trimitere
-  (o poză de câțiva MB pleacă în ~200 KB) și **re-encodate**, ceea ce **șterge complet datele
-  EXIF, inclusiv GPS-ul** — nu-ți mai scapă locația către destinatar. O poză mare nu mai
-  blochează textele trimise imediat după ea.
-- **Contor de necitite corect.** La revenirea online după o pauză, mesajele re-livrate din
-  coadă nu mai umflă numărul de necitite — vezi exact câte mesaje noi ai.
+### Improved
+- **Calm notifications.** With the app closed, you get **one** "New encrypted message"
+  notification, not a stack — no matter how many messages or photo chunks arrive, or from how many
+  senders. The sound alerts you once, not on a loop. (The content is all there when you open.)
+- **Faster photos with no location.** Photos are automatically resized before sending (a few-MB
+  photo goes out at ~200 KB) and **re-encoded**, which **completely strips EXIF data, including
+  GPS** — your location no longer leaks to the recipient. A large photo no longer blocks texts
+  sent right after it.
+- **Correct unread counter.** When coming back online after a break, messages re-delivered from
+  the queue no longer inflate the unread count — you see exactly how many new messages you have.
 
-### Adăugat
-- **Șterge conversația la ambii.** În opțiunile conversației poți goli conversația și la tine,
-  și la celălalt. Onest: **cooperativ, nu garantat** — un contact cu backup, screenshot sau
-  client modificat poate păstra mesajele.
-- **Ghid pentru notificări cu app-ul închis (Android).** La prima pornire, un pas te ajută să
-  activezi „Autostart" și „Fără restricții de baterie" pe telefoanele care opresc agresiv
-  aplicațiile în fundal (OPPO/ColorOS, Xiaomi, Huawei). E o limită a producătorului, nu a
-  Blink — la fel cer Signal și WhatsApp.
+### Added
+- **Delete the conversation for both.** In the conversation options you can clear the conversation
+  on your side and the other's. Honest: **cooperative, not guaranteed** — a contact with a backup,
+  screenshot or modified client can keep the messages.
+- **Guide for notifications with the app closed (Android).** On first launch, a step helps you
+  enable "Autostart" and "No battery restrictions" on phones that aggressively kill background
+  apps (OPPO/ColorOS, Xiaomi, Huawei). It's a manufacturer limitation, not Blink's — Signal and
+  WhatsApp ask for the same.
 
-### Schimbat
-- **Apelurile voce/video sunt ascunse temporar.** Funcția n-a fost testată suficient pe
-  dispozitive reale; preferăm să n-o arătăm până merge sigur, în loc de un buton care nu
-  răspunde. Revine într-o versiune viitoare.
+### Changed
+- **Voice/video calls are temporarily hidden.** The feature wasn't tested enough on real devices;
+  we prefer not to show it until it works reliably, instead of a button that doesn't respond. It
+  returns in a future version.
 
-### Note
-- **Fără re-pair:** formatul mesajelor pe rețea e neschimbat. Actualizezi peste versiunea
-  anterioară și îți păstrezi identitatea și conversațiile — fără reinstalare, fără QR nou.
+### Notes
+- **No re-pair:** the on-network message format is unchanged. You update on top of the previous
+  version and keep your identity and conversations — no reinstall, no new QR.
