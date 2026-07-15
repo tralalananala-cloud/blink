@@ -9,6 +9,7 @@
 import { RETICULUM_GATEWAY } from "../config";
 import { engine } from "../crypto";
 import { useApp } from "../state/store";
+import { loadBleNative, type BleNative } from "./bleNative";
 
 class ReticulumTransport {
   myAddr: string | null = null;
@@ -17,6 +18,16 @@ class ReticulumTransport {
   private token: string | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private onBlob: ((blobB64: string) => void) | null = null;
+  // Modulul nativ (Android): polling-ul rulează într-un thread nativ, ca să nu fie oprit de pauza
+  // timerelor JS cu app-ul închis. undefined = neîncărcat încă; null = indisponibil (web/iOS).
+  private native: BleNative | null | undefined;
+  private nativeSub: { remove(): void } | null = null;
+  private usingNative = false;
+
+  private nat(): BleNative | null {
+    if (this.native === undefined) this.native = loadBleNative();
+    return this.native;
+  }
 
   /** Adresa gateway-ului: setarea userului are prioritate; altfel valoarea din build (de obicei gol). */
   private gw(): string {
@@ -61,17 +72,39 @@ class ReticulumTransport {
     catch { return false; }
   }
 
-  /** Pornește polling-ul inbox-ului propriu; fiecare blob primit → callback. */
+  /**
+   * Pornește polling-ul inbox-ului propriu; fiecare blob primit → callback.
+   * Android: polling NATIV (thread propriu) → rulează și cu app-ul închis. Restul (web/iOS/fără
+   * modul nativ): fallback pe timer JS (se oprește cu app-ul închis, dar acolo n-avem serviciu oricum).
+   */
   startPolling(onBlob: (blobB64: string) => void) {
     this.onBlob = onBlob;
     this.stopPolling();
-    this.pollTimer = setInterval(() => void this.poll(), 4000);
+    const n = this.nat();
+    if (n && this.myAddr && this.token) {
+      this.nativeSub = n.addListener("onReticulumBlob", (e) => { if (e.blob) this.onBlob?.(e.blob); });
+      void n.startReticulumPoll(this.gw(), this.myAddr, this.token);
+      this.usingNative = true;
+    } else {
+      this.pollTimer = setInterval(() => void this.poll(), 4000);
+    }
   }
-  stopPolling() { if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; } }
+  stopPolling() {
+    if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+    if (this.usingNative) {
+      try { this.nativeSub?.remove(); } catch {}
+      this.nativeSub = null;
+      const n = this.nat();
+      if (n) void n.stopReticulumPoll();
+      this.usingNative = false;
+    }
+  }
 
   /** Uită adresa/token-ul + oprește polling-ul (la schimbarea gateway-ului sau dezactivare). */
   reset() { this.stopPolling(); this.myAddr = null; this.token = null; }
 
+  // Fallback JS pentru platformele fără modul nativ (web/iOS): timer JS. ⚠️ Pe Android NU se
+  // folosește — polling-ul e nativ (vezi startPolling), fiindcă timerele JS se opresc cu app-ul închis.
   private async poll() {
     if (!this.on() || !this.myAddr || !this.token) return;
     try {

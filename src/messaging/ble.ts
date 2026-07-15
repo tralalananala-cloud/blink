@@ -32,6 +32,16 @@ function notifStrings(): { title: string; body: string } {
   }
 }
 
+/** Textul notificării permanente în mod HOLD (Reticulum în fundal, fără BLE). */
+function holdStrings(): { title: string; body: string } {
+  try {
+    const t = require("../i18n").dictFor().settings;
+    return { title: t.reticulumNotifTitle, body: t.reticulumNotifBody };
+  } catch {
+    return { title: "Blink", body: "Receiving over Reticulum in the background." };
+  }
+}
+
 class BleMeshTransport {
   private native: BleNative | null | undefined; // undefined = încă neîncărcat (lazy, o dată)
   private nearby = new Set<string>(); // did8-urile peer-ilor văzuți acum în raza Bluetooth
@@ -96,6 +106,23 @@ class BleMeshTransport {
       console.log("[BLE] send a aruncat:", String(e));
       return false;
     }
+  }
+
+  /**
+   * Mod HOLD pentru Reticulum: ține procesul/JS viu cu app-ul închis, FĂRĂ a porni BLE. Native-ul
+   * face ref-counting → dacă BLE deja rulează serviciul, holdOn nu pornește nimic în plus, iar
+   * holdOff nu oprește serviciul cât timp BLE îl mai vrea. Sigur de chemat idempotent.
+   */
+  holdOn(): void {
+    const n = this.nat();
+    if (!n) return;
+    const { title, body } = holdStrings();
+    try { void n.startHold(title, body); } catch {}
+  }
+  holdOff(): void {
+    const n = this.nat();
+    if (!n) return;
+    try { void n.stopHold(); } catch {}
   }
 
   /** Oprește radio-ul + uită peer-ii (toggle off, wipe, repornire curată). */

@@ -13,11 +13,24 @@ export interface BleNative {
    */
   start(myDid8: string, title: string, body: string): Promise<void>;
   stop(): Promise<void>;
+  /**
+   * Mod HOLD (fără BLE): pornește serviciul de foreground doar ca să țină procesul/contextul JS viu
+   * pentru polling-ul Reticulum cu app-ul închis. Independent de start/stop prin ref-counting nativ.
+   */
+  startHold(title: string, body: string): Promise<void>;
+  stopHold(): Promise<void>;
   /** Trimite un blob opac peer-ului din apropiere cu did8-ul dat. false = nelivrat. */
   send(did8: string, blobB64: string): Promise<boolean>;
+  /**
+   * Polling Reticulum NATIV (thread propriu, nu timer JS → rulează și cu app-ul închis, când RN
+   * pune pe pauză setInterval). Blob-urile primite sosesc pe evenimentul `onReticulumBlob`.
+   * Idempotent: re-apelabil la re-register (actualizează addr/token). Trimiterea rămâne în JS.
+   */
+  startReticulumPoll(gateway: string, addr: string, token: string): Promise<void>;
+  stopReticulumPoll(): Promise<void>;
   addListener(
-    event: "onBlob" | "onPeerSeen" | "onPeerLost",
-    cb: (e: { blobB64?: string; did8?: string }) => void
+    event: "onBlob" | "onPeerSeen" | "onPeerLost" | "onReticulumBlob",
+    cb: (e: { blobB64?: string; did8?: string; blob?: string }) => void
   ): { remove(): void };
 }
 

@@ -227,14 +227,30 @@ class Relay {
             );
           } catch {}
         });
+        this.syncReticulumBackground();
       }
     } finally { this.reticulumBusy = false; }
+  }
+
+  /**
+   * Pornește/oprește serviciul de fundal HOLD pentru Reticulum (ține procesul/JS viu cu app-ul
+   * închis → polling-ul continuă + notificări). Independent de BLE: native-ul face ref-counting,
+   * deci dacă BLE deja ține serviciul, holdOn e no-op, iar holdOff nu-l oprește cât BLE îl vrea.
+   * Public — Settings îl cheamă când userul schimbă toggle-ul `reticulumBackground`.
+   */
+  syncReticulumBackground(): void {
+    // NU cerem `reticulumUp` (înregistrat pe moment): serviciul ține procesul viu ca înregistrarea
+    // + polling-ul să se poată face/retry și cu app-ul închis. Altfel = chicken-and-egg (ai nevoie
+    // de proces viu ca să te înregistrezi, dar porneai serviciul doar dacă erai deja înregistrat).
+    const on = reticulum.on() && !!useApp.getState().settings.reticulumBackground;
+    if (on) bleMesh.holdOn(); else bleMesh.holdOff();
   }
 
   /** Apelat de ecranul Settings când userul schimbă toggle-ul/adresa Reticulum → re-inițializează. */
   refreshReticulum(): void {
     this.reticulumUp = false;
     reticulum.reset();
+    bleMesh.holdOff(); // Reticulum resetat → nu mai ținem serviciul HOLD (se re-pornește la re-register dacă e cazul)
     if (reticulum.on()) void this.ensureReticulum();
   }
 
@@ -406,6 +422,10 @@ class Relay {
         // Eșecul de decriptare (catch) NU confirmă → mesajul rămâne în coadă pt re-încercare.
         if (qid) this.queueAck(qid);
         const c = parseControl(plaintext); // codec pur (Faza 3.2) — clasifică mesajul de control
+        // Învață adresa Reticulum a peer-ului din ORICE mesaj care o poartă (text/ack/antet-media).
+        // Central aici, nu doar pe „t": prima bifă de confirmare care circulă (prin releu, la
+        // bootstrap) predă adresele în ambele sensuri → Reticulum poate prelua de la mesajul următor.
+        if ((c as any).ra) this.peerReticulum.set(env.fromDid, (c as any).ra);
         switch (c.k) {
           case "a": // confirmare (bifă): urcă starea mesajului propriu
             useApp.getState().markMsgStatus(env.fromDid, c.id, c.s);
@@ -473,7 +493,6 @@ class Relay {
             const body = c.k === "t" ? (c.b ?? "") : c.b;
             const remoteId = c.k === "t" ? c.id : undefined;
             const senderName = c.k === "t" ? c.n : undefined;
-            if (c.k === "t" && c.ra) this.peerReticulum.set(env.fromDid, c.ra); // învață adresa Reticulum a peer-ului
             this.incoming?.(env.fromDid, body, remoteId, senderName);
             if (remoteId) this.sendAck(env.fromDid, remoteId, "delivered"); // ✓✓ livrat, automat
             return;
@@ -609,7 +628,7 @@ class Relay {
       const res = await streamFileChunks(att.uri, async (b64, i, total) => {
         if (!mhSent) {
           const meta = { kind: att.kind, name: att.name, dur: att.durationMs, w: att.width, h: att.height, size: att.size, n: myName() };
-          await this.sendCtl(peerDid, ctl.mediaHeader(msgId, total, meta, gid));
+          await this.sendCtl(peerDid, ctl.mediaHeader(msgId, total, meta, gid, reticulum.myAddr ?? undefined));
           mhSent = true;
         }
         await this.sendCtl(peerDid, ctl.mediaChunk(msgId, i, b64));
@@ -637,7 +656,7 @@ class Relay {
     if (!this.connected && !this.altReach(peerDid)) return false;
     if (!(await this.ensureSession(peerDid))) return false;
     try {
-      const env = await this.encryptFor(peerDid, JSON.stringify(ctl.ack(id, kind)));
+      const env = await this.encryptFor(peerDid, JSON.stringify(ctl.ack(id, kind, reticulum.myAddr ?? undefined)));
       await this.transmit(peerDid, env);
       return true;
     } catch { return false; }

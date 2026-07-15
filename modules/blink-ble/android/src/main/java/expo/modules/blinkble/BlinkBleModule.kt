@@ -14,7 +14,7 @@ import expo.modules.kotlin.modules.ModuleDefinition
 class BlinkBleModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("BlinkBle")
-    Events("onBlob", "onPeerSeen", "onPeerLost")
+    Events("onBlob", "onPeerSeen", "onPeerLost", "onReticulumBlob")
 
     AsyncFunction("start") { myDid8: String, title: String, body: String, promise: Promise ->
       val ctx = appContext.reactContext
@@ -38,6 +38,35 @@ class BlinkBleModule : Module() {
       promise.resolve(null)
     }
 
+    // Mod HOLD (fără BLE): ține procesul/JS viu pentru polling-ul Reticulum cu app-ul închis.
+    // Independent de start/stop (BLE) prin ref-counting în BleService.
+    AsyncFunction("startHold") { title: String, body: String, promise: Promise ->
+      val ctx = appContext.reactContext
+        ?: return@AsyncFunction promise.reject("ERR_BLE_CTX", "context indisponibil", null)
+      try { BleService.startHold(ctx, title, body); promise.resolve(null) }
+      catch (e: Exception) { promise.reject("ERR_HOLD_START", e.message ?: "startHold esuat", e) }
+    }
+
+    AsyncFunction("stopHold") { promise: Promise ->
+      val ctx = appContext.reactContext
+      try { if (ctx != null) BleService.stopHold(ctx) } catch (_: Exception) {}
+      promise.resolve(null)
+    }
+
+    // Polling Reticulum NATIV: thread propriu care lovește GET /recv (nu timer JS → nu e pus pe
+    // pauză cu app-ul închis). Blob-urile primite → eveniment onReticulumBlob în JS. Trimiterea și
+    // înregistrarea rămân în JS. JS re-cheamă startReticulumPoll la re-register (token nou).
+    AsyncFunction("startReticulumPoll") { gateway: String, addr: String, token: String, promise: Promise ->
+      ReticulumPoller.sink = { blob -> sendEvent("onReticulumBlob", mapOf("blob" to blob)) }
+      ReticulumPoller.start(gateway, addr, token)
+      promise.resolve(null)
+    }
+
+    AsyncFunction("stopReticulumPoll") { promise: Promise ->
+      ReticulumPoller.stop()
+      promise.resolve(null)
+    }
+
     AsyncFunction("send") { did8: String, blobB64: String, promise: Promise ->
       val e = BleHolder.peek() ?: return@AsyncFunction promise.resolve(false)
       e.send(did8, blobB64) { ok -> promise.resolve(ok) }
@@ -45,8 +74,10 @@ class BlinkBleModule : Module() {
 
     OnDestroy {
       // Procesul RN moare (app închis), dar mesh-ul rămâne viu în serviciu — DE ASTA existăm.
-      // Desprindem doar ascultătorul, ca să nu trimitem evenimente într-un bridge mort.
+      // Desprindem ascultătorii, ca să nu trimitem evenimente într-un bridge mort. Fără sink,
+      // poller-ul Reticulum NU mai golește inbox-ul (vezi ReticulumPoller.loop) → zero pierdere.
       BleHolder.sink = null
+      ReticulumPoller.sink = null
     }
   }
 }

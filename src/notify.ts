@@ -55,6 +55,12 @@ export async function getPushToken(): Promise<string | null> {
 }
 
 export async function notifyMessage(title: string, body: string, convId?: string): Promise<void> {
+  // Contextul JS poate fi ÎNVIAT headless (app închis, mesaj sosit prin BLE/Reticulum, ținut viu
+  // de serviciul foreground) FĂRĂ ca app/_layout să fi rulat setupNotifications → `granted` rămâne
+  // fals și notificarea s-ar pierde tăcut, deși mesajul se stochează. Asigurăm lazy setup-ul:
+  // permisiunea e deja acordată pe device dintr-o sesiune anterioară, deci re-verificarea reușește
+  // și canalul se (re)creează. Fără asta, notificările erau nedeterministe cu app-ul închis.
+  if (!granted) await setupNotifications();
   if (!granted) return;
   try {
     await Notifications.scheduleNotificationAsync({

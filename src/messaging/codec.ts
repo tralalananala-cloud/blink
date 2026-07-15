@@ -18,9 +18,13 @@ export const GROUP_MAX = 16;
 
 // ── Encoderi (obiectul {k:...}; JSON.stringify + criptarea le face apelantul) ──
 export const ctl = {
+  // `ra` = adresa Reticulum proprie, călătorește CRIPTAT (E2E) pe text/ack/antet-media ca peer-ul
+  // s-o învețe fără schimb explicit. Pusă și pe ack fiindcă ea e răspunsul care ajunge înapoi la
+  // expeditorul care încă nu ne știe adresa → deblochează bootstrap-ul (altfel Reticulum nu preia
+  // niciodată dacă releul e tăiat înainte de un dus-întors de text). Nu pe bucăți (mc): antetul ajunge.
   text: (id: string, b: string, n: string, ra?: string) => ({ k: "t" as const, id, b, n, ra }),
-  ack: (id: string, s: AckKind) => ({ k: "a" as const, id, s }),
-  mediaHeader: (id: string, n: number, meta: any, gid?: string) => ({ k: "mh" as const, id, n, meta, gid }),
+  ack: (id: string, s: AckKind, ra?: string) => ({ k: "a" as const, id, s, ra }),
+  mediaHeader: (id: string, n: number, meta: any, gid?: string, ra?: string) => ({ k: "mh" as const, id, n, meta, gid, ra }),
   mediaChunk: (id: string, i: number, d: string) => ({ k: "mc" as const, id, i, d }),
   edit: (id: string, b: string) => ({ k: "e" as const, id, b }),
   delMsg: (id: string) => ({ k: "d" as const, id }),
@@ -36,12 +40,12 @@ export const ctl = {
 
 // ── Parser: plaintext primit → mesaj de control tipat ──
 export type Control =
-  | { k: "a"; id: string; s: AckKind }
+  | { k: "a"; id: string; s: AckKind; ra?: string }
   | { k: "e"; id: string; b: string }
   | { k: "d"; id: string }
   | { k: "dc" }
   | { k: "call"; sig: any }
-  | { k: "mh"; id: string; n: number; meta: any; gid?: string }
+  | { k: "mh"; id: string; n: number; meta: any; gid?: string; ra?: string }
   | { k: "mc"; id: string; i: number; d: string }
   | { k: "gt"; gid: string; id: string; b: string; n?: string; gname?: string }
   | { k: "gc"; gid: string; act: GroupAct; members?: string[]; name?: string }
@@ -55,12 +59,12 @@ export type Control =
 export function parseControl(plaintext: string): Control {
   let p: any = null;
   try { p = JSON.parse(plaintext); } catch { /* ne-JSON → raw */ }
-  if (p && p.k === "a" && p.id) return { k: "a", id: p.id, s: p.s === "read" ? "read" : "delivered" };
+  if (p && p.k === "a" && p.id) return { k: "a", id: p.id, s: p.s === "read" ? "read" : "delivered", ra: typeof p.ra === "string" ? p.ra : undefined };
   if (p && p.k === "e" && p.id) return { k: "e", id: p.id, b: p.b ?? "" };
   if (p && p.k === "d" && p.id) return { k: "d", id: p.id };
   if (p && p.k === "dc") return { k: "dc" };
   if (p && p.k === "call" && p.sig) return { k: "call", sig: p.sig };
-  if (p && p.k === "mh" && p.id) return { k: "mh", id: p.id, n: p.n, meta: p.meta || {}, gid: typeof p.gid === "string" ? p.gid : undefined };
+  if (p && p.k === "mh" && p.id) return { k: "mh", id: p.id, n: p.n, meta: p.meta || {}, gid: typeof p.gid === "string" ? p.gid : undefined, ra: typeof p.ra === "string" ? p.ra : undefined };
   if (p && p.k === "mc" && p.id) return { k: "mc", id: p.id, i: p.i, d: p.d };
   if (p && p.k === "gt" && p.gid && p.id) return { k: "gt", gid: p.gid, id: p.id, b: p.b ?? "", n: p.n, gname: typeof p.gname === "string" ? p.gname : undefined };
   if (p && p.k === "gc" && p.gid && GROUP_ACTS.includes(p.act)) return { k: "gc", gid: p.gid, act: p.act, members: Array.isArray(p.members) ? p.members : undefined, name: typeof p.name === "string" ? p.name : undefined };

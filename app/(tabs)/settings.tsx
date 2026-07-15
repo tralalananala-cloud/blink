@@ -144,6 +144,18 @@ export default function Settings() {
             keyboardType="url"
             style={[styles.reticulumInput, { backgroundColor: colors.surface, borderColor: colors.border, color: colors.textPrimary }]}
           />
+          {/* Reticulum în fundal — serviciu de foreground ca să primești + notifici cu app-ul închis */}
+          {!!settings.reticulumEnabled && (
+            <SettingRow
+              title={t.settings.reticulumBackground}
+              subtitle={t.settings.reticulumBackgroundBody}
+              value={!!settings.reticulumBackground}
+              onValueChange={(v) => {
+                update({ reticulumBackground: v });
+                relay.syncReticulumBackground();
+              }}
+            />
+          )}
 
           {/* BLE mesh (experimental) — telefon↔telefon prin Bluetooth, fără internet (v1: proximitate) */}
           <SettingRow

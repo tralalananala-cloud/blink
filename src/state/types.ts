@@ -32,6 +32,12 @@ export interface Settings {
   reticulumEnabled: boolean;
   /** Adresa gateway-ului Reticulum (https). Gol → folosește valoarea din build (de obicei gol). */
   reticulumGateway: string;
+  /**
+   * Ține polling-ul Reticulum viu și cu app-ul închis (serviciu de foreground → contextul JS
+   * rămâne viu → polling-ul continuă + notificări). Fără el, mesajele Reticulum ajung doar cât
+   * ții Blink deschis. IMPLICIT OPRIT: costă o notificare permanentă + baterie (rețea trează).
+   */
+  reticulumBackground: boolean;
   /** Mesh Bluetooth (experimental): livrare directă telefon↔telefon în proximitate (BLE). */
   bleMeshEnabled: boolean;
   /**

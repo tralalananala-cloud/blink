@@ -18,6 +18,17 @@ describe("encoderi ctl.*", () => {
     expect(ctl.mediaHeader("x", 3, { kind: "image" })).toEqual({ k: "mh", id: "x", n: 3, meta: { kind: "image" } });
     expect(ctl.mediaChunk("x", 0, "DATA")).toEqual({ k: "mc", id: "x", i: 0, d: "DATA" });
   });
+  it("ra (adresa Reticulum) călătorește criptat pe ack + antet media, round-trip", () => {
+    // Bootstrap-ul transportului Reticulum: peer-ul învață adresa noastră din aceste câmpuri.
+    expect(ctl.ack("m", "delivered", "rAddr").ra).toBe("rAddr");
+    expect(ctl.mediaHeader("x", 2, { kind: "image" }, undefined, "rAddr").ra).toBe("rAddr");
+    expect(parseControl(JSON.stringify(ctl.ack("m", "delivered", "rAddr"))))
+      .toEqual({ k: "a", id: "m", s: "delivered", ra: "rAddr" });
+    expect(parseControl(JSON.stringify(ctl.mediaHeader("x", 2, { kind: "image" }, "g1", "rAddr"))))
+      .toEqual({ k: "mh", id: "x", n: 2, meta: { kind: "image" }, gid: "g1", ra: "rAddr" });
+    // fără Reticulum (ra undefined) cheia dispare la serializare → compat cu peer vechi
+    expect(JSON.parse(JSON.stringify(ctl.ack("m", "read"))).ra).toBeUndefined();
+  });
   it("text fără ra → ra undefined (cheia dispare la JSON.stringify)", () => {
     const o = ctl.text("m", "b", "N");
     expect(o.ra).toBeUndefined();

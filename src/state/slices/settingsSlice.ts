@@ -19,6 +19,7 @@ export const createSettingsSlice: Slice<SettingsSlice> = (set, get) => ({
     reticulumEnabled: false,
     // gateway-ul public Blink pre-completat — userul doar pornește toggle-ul (poate pune propriul gateway)
     reticulumGateway: "https://blink-gw.tralalananala.workers.dev",
+    reticulumBackground: false, // opt-in: serviciu de fundal + notificare permanentă (cost baterie)
     bleMeshEnabled: false,
     bleMeshBackground: true, // dacă pornești mesh-ul, aștepți să și primești mesaje — altfel n-are rost
 
