@@ -13,7 +13,7 @@ import { CipherEnvelope, SerializedBundle } from "../crypto/types";
 import { useApp } from "../state/store";
 import { RELAY_URL, RELAY_HTTP } from "../config";
 import { Attachment } from "../data/mockData";
-import { createMediaSink, MediaSink, streamFileChunks, writeMedia } from "../media/wire";
+import { createMediaSink, MediaSink, streamFileChunks, writeMedia, MAX_MEDIA_BYTES, CHUNK_BYTES } from "../media/wire";
 import { callManager } from "../calls/webrtc";
 import { reticulum } from "./reticulum";
 import { bleMesh } from "./ble";
@@ -23,7 +23,15 @@ import { Outbox } from "./outbox"; // fiabilitatea livrării (Faza 3.2) — outb
 
 type IncomingCb = (fromDid: string, plaintext: string, remoteId?: string, senderName?: string) => void;
 // M4 — sink = scriere streaming în fișier (nativ); parts = asamblare legacy în RAM (web/fallback)
-type MediaAsm = { meta: any; n: number; parts: string[] | null; got: number; sink: MediaSink | null; seen: Set<number>; lastAt: number; gid?: string };
+type MediaAsm = { meta: any; n: number; parts: string[] | null; got: number; sink: MediaSink | null; seen: Set<number>; lastAt: number; bytes: number; gid?: string };
+
+// #7 plafon pe RECEPȚIE: sender-ul respectă MAX_MEDIA_BYTES, dar un contact rău-intenționat
+// poate anunța un `n` uriaș sau trimite bucăți supradimensionate ca să-ți umple discul/RAM-ul.
+// Refuzăm transferul dacă (a) nr. de bucăți anunțat depășește cât încap în plafon (+slack),
+// (b) meta.size depășește plafonul, sau (c) octeții scriși efectiv depășesc plafonul (sender
+// care minte despre `n`/size). Slack mic pt variații de padding base64 între chunk-uri.
+const MAX_MEDIA_CHUNKS = Math.ceil(MAX_MEDIA_BYTES / CHUNK_BYTES) + 8;
+const MAX_CHUNK_B64 = 96 * 1024; // o bucată base64 normală ≤48KB; peste dublu = anormal, refuză
 // Cârlige injectate de messaging/group.ts (fan-out grupuri) — evită importul circular relay↔group.
 type GroupHooks = { onAck: (fromDid: string, id: string, s: AckKind) => void; onReady: () => void; onReset: () => void };
 
@@ -446,6 +454,13 @@ class Relay {
             return;
           case "mh": { // antet media: pregătește reasamblarea — sink nativ (streaming) sau parts (legacy)
             const key = env.fromDid + ":" + c.id;
+            // #7 refuză din start transferurile abuzive (nr. bucăți sau size anunțat peste plafon)
+            const declaredSize = Number(c.meta?.size) || 0;
+            if (!(c.n > 0) || c.n > MAX_MEDIA_CHUNKS || declaredSize > MAX_MEDIA_BYTES) {
+              this.mediaAsm.get(key)?.sink?.abort();
+              this.mediaAsm.delete(key);
+              return; // plic ignorat (fără ack) — transferul nu pornește
+            }
             // C2.4: un mh NOU peste un transfer în curs (resend al expeditorului după o
             // întrerupere) — abortează sink-ul vechi ÎNAINTE de a crea unul nou. Fără asta,
             // două sink-uri scriu concurent în același fișier media/<id> (createMediaSink face
@@ -453,7 +468,7 @@ class Relay {
             this.mediaAsm.get(key)?.sink?.abort();
             const sink = createMediaSink(c.id, c.meta.kind, c.meta.name);
             this.mediaAsm.set(key, {
-              meta: c.meta, n: c.n, got: 0, sink, parts: sink ? null : new Array(c.n), seen: new Set(), lastAt: Date.now(), gid: c.gid,
+              meta: c.meta, n: c.n, got: 0, sink, parts: sink ? null : new Array(c.n), seen: new Set(), lastAt: Date.now(), bytes: 0, gid: c.gid,
             });
             return;
           }
@@ -461,9 +476,15 @@ class Relay {
             const key = env.fromDid + ":" + c.id;
             const a = this.mediaAsm.get(key);
             if (!a || a.seen.has(c.i)) return; // dedupe după index
+            // #7 gărzi pe bucată: index în interval, bucată nu supradimensionată, iar cumulul
+            // de octeți sub plafon (sender care minte despre `n`/size → oprit aici, mid-transfer).
+            const chunkStr = typeof c.d === "string" ? c.d : "";
+            if (c.i < 0 || c.i >= a.n || chunkStr.length > MAX_CHUNK_B64) { a.sink?.abort(); this.mediaAsm.delete(key); return; }
+            a.bytes += Math.floor((chunkStr.length * 3) / 4);
+            if (a.bytes > MAX_MEDIA_BYTES) { a.sink?.abort(); this.mediaAsm.delete(key); return; }
             try {
-              if (a.sink) a.sink.writeChunk(c.i, c.d);
-              else a.parts![c.i] = c.d;
+              if (a.sink) a.sink.writeChunk(c.i, chunkStr);
+              else a.parts![c.i] = chunkStr;
             } catch { a.sink?.abort(); this.mediaAsm.delete(key); return; }
             a.seen.add(c.i);
             a.got++;

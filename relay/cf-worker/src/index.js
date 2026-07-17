@@ -26,6 +26,7 @@ import { verifyReg } from "./auth.mjs"; // AUTH RELEU (C1) — helperi puri, tes
 import { enqueue, pruneFresh, removeAcked, MAX_QUEUE, TTL } from "./queue.mjs"; // COADĂ at-least-once — pur, testat (test/queue.test.mjs)
 import { buildServiceJwt, buildPushMessage, shouldPush } from "./push.mjs"; // PUSH FCM — helperi puri, testați (test/push.test.mjs, test/push_collapse.test.mjs)
 import { bucketHit } from "./ratelimit.mjs"; // token-bucket pur, testat (test/ratelimit.test.mjs)
+import { connThrottle } from "./connguard.mjs"; // #5 throttle conexiuni/reg per IP — pur, testat (test/connguard.test.mjs)
 
 const shardName = (did) => "shard:" + did;
 // #5 anti-abuz: rate-limit/dest (anti-flood). Generos, ca să nu afecteze conversațiile
@@ -47,6 +48,7 @@ export class Relay {
     this.fcmAtExp = 0;
     this.rl = new Map(); // #5 rate-limit per destinatar (in-memory pe shard)
     this.opkRl = new Map(); // #B1 rate-limit POP-uri OPK per DID cerut (in-memory pe shard)
+    this.connRl = new Map(); // #5 throttle conexiuni/reg per IP (in-memory pe instanța guard)
   }
 
   // #5 — true dacă `to` a depășit pragul de mesaje în fereastra de timp (anti-flood).
@@ -157,6 +159,15 @@ export class Relay {
       return new Response(JSON.stringify({ ok: true, online }), {
         headers: { "content-type": "application/json" },
       });
+    }
+    // #5 Intern: throttle per-IP de conexiuni/înregistrări. Worker-ul rutează TOATE upgrade-urile
+    // WebSocket prin instanța „guard" (un DID sintetic) → stare partajată per IP, deci limita ține
+    // și când atacatorul înregistrează multe DID-uri (fiecare pe alt shard).
+    if (url.pathname === "/guard") {
+      const ip = url.searchParams.get("ip") || "unknown";
+      const r = connThrottle(this.connRl.get(ip), Date.now());
+      this.connRl.set(ip, r.hist);
+      return new Response(JSON.stringify({ limited: r.limited }), { headers: { "content-type": "application/json" } });
     }
     // Intern (cross-shard): citește bundle-ul unui DID pe care ACEST shard îl deține.
     if (url.pathname === "/bundle") {
@@ -370,6 +381,15 @@ export default {
 
     // Upgrade WebSocket: ruteaza pe shardul de casa al userului (did din query).
     if ((req.headers.get("Upgrade") || "").toLowerCase() === "websocket") {
+      // #5 throttle per-IP ÎNAINTE de a accepta socketul (anti-înregistrare în masă). Instanța
+      // „guard" partajează starea între toate shard-urile. Fail-open: dacă guard-ul pică, lasă
+      // conexiunea (disponibilitatea contactelor oneste > apărarea perfectă anti-abuz).
+      const ip = req.headers.get("cf-connecting-ip") || "unknown";
+      try {
+        const g = await homeStub(env, "guard").fetch("https://relay/guard?ip=" + encodeURIComponent(ip));
+        const gj = await g.json();
+        if (gj.limited) return new Response("rate limited", { status: 429 });
+      } catch { /* fail-open */ }
       const did = url.searchParams.get("did") || "_legacy"; // clientii vechi (fara ?did) cad pe un shard comun
       return homeStub(env, did).fetch(req);
     }

@@ -272,8 +272,10 @@ export class LibsignalEngine implements CryptoEngine {
     // BINDING ANTI-MITM (C2) + A1: verifică într-un singur loc (a) authPub prezent,
     // (b) DID = didFrom(idKey,authPub) === peerDid, (c) lsSig valid peste `ls` (leagă TOT
     // bundle-ul, kyber inclus, de authPub → releul nu poate șterge/altera câmpuri), (d) kyber
-    // prezent (fail-closed PQXDH). Decizia #0 A: lsSig lipsă = warn (impus în N+1 → strict:true).
-    verifyPeerBundle(peerDid, bundle.ls, bundle.lsSig, { strict: false });
+    // prezent (fail-closed PQXDH). #4: strict:true — lsSig OBLIGATORIU. Sigur pt compat: getBundle
+    // semnează mereu lsSig, iar bundle-urile pre-libsignal n-au authPub → deja respinse mai sus.
+    // Ramura „authPub prezent + lsSig lipsă" e de neatins de un client real (Decizia #0 A închisă).
+    verifyPeerBundle(peerDid, bundle.ls, bundle.lsSig, { strict: true });
     const peerIdPub = PublicKey._fromSerialized(fromB64(b.idKey));
     // #4: folosește one-time prekey-ul POPat de releu (unic pt acest contact); fallback la
     // prekey-ul last-resort din bundle (reutilizabil) când poolul peer-ului e gol.

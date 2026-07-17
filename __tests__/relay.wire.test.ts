@@ -57,6 +57,7 @@ const mockMedia: any = {
   splitChunks: jest.fn(() => []),
   readBase64: jest.fn(),
   MAX_MEDIA_BYTES: 8 * 1024 * 1024,
+  CHUNK_BYTES: (48 * 1024 * 3) / 4, // 36864 — necesar pt plafonul de bucăți la recepție (#7)
 };
 jest.mock("../src/media/wire", () => mockMedia);
 
@@ -462,5 +463,67 @@ describe("T2 — media incompletă nu blochează textul; transferul mort e aband
     await deliver({ k: "mh", id: "dup1", n: 3, meta: { kind: "image", name: "p.jpg" }, _v: 2 });
     expect(sinks[0].abort).toHaveBeenCalledTimes(1); // sink-ul vechi ÎNCHIS/ȘTERS înainte de-al doilea
     expect(sinks.length).toBe(2);                     // sink nou pt transferul reluat
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// #7 — plafon pe RECEPȚIE: un contact rău-intenționat NU poate umple discul/RAM-ul cu media.
+describe("#7 media — gărzi pe recepție împotriva transferurilor abuzive", () => {
+  const BIG64 = "A".repeat(98304); // 96KB base64 (= MAX_CHUNK_B64, la limită)
+
+  it("mh cu nr. de bucăți absurd (> plafon) e refuzat → transferul nu pornește", async () => {
+    open();
+    await deliver({ k: "mh", id: "flood1", n: 10_000_000, meta: { kind: "image", name: "x.jpg" } });
+    expect((relay as any).mediaAsm.has(PEER + ":flood1")).toBe(false); // n-a fost înregistrat
+    await deliver({ k: "mc", id: "flood1", i: 0, d: "A" });
+    expect(mockState.receiveMessage).not.toHaveBeenCalled(); // nicio bucată scrisă
+  });
+
+  it("mh cu size anunțat peste MAX_MEDIA_BYTES e refuzat", async () => {
+    open();
+    await deliver({ k: "mh", id: "big1", n: 2, meta: { kind: "video", name: "v.mp4", size: 50 * 1024 * 1024 } });
+    expect((relay as any).mediaAsm.has(PEER + ":big1")).toBe(false);
+  });
+
+  it("mh cu n invalid (0) e refuzat", async () => {
+    open();
+    await deliver({ k: "mh", id: "zero1", n: 0, meta: { kind: "image", name: "x.jpg" } });
+    expect((relay as any).mediaAsm.has(PEER + ":zero1")).toBe(false);
+  });
+
+  it("o bucată supradimensionată (> MAX_CHUNK_B64) abortează transferul", async () => {
+    open();
+    await deliver({ k: "mh", id: "fat1", n: 3, meta: { kind: "image", name: "x.jpg" } });
+    expect((relay as any).mediaAsm.has(PEER + ":fat1")).toBe(true); // antet acceptat (n mic)
+    await deliver({ k: "mc", id: "fat1", i: 0, d: "B".repeat(200 * 1024) }); // 200KB — anormal
+    expect((relay as any).mediaAsm.has(PEER + ":fat1")).toBe(false);        // abortat + șters
+    expect(mockState.receiveMessage).not.toHaveBeenCalled();
+  });
+
+  it("index de bucată în afara intervalului (i >= n) abortează transferul", async () => {
+    open();
+    await deliver({ k: "mh", id: "oob1", n: 2, meta: { kind: "image", name: "x.jpg" } });
+    await deliver({ k: "mc", id: "oob1", i: 99, d: "A" }); // index imposibil
+    expect((relay as any).mediaAsm.has(PEER + ":oob1")).toBe(false);
+    expect(mockState.receiveMessage).not.toHaveBeenCalled();
+  });
+
+  it("cumulul de octeți peste MAX_MEDIA_BYTES abortează (sender care minte despre n/size)", async () => {
+    open();
+    // n „valid" (sub plafonul de bucăți), dar bucățile însumate depășesc 8MB → oprit mid-transfer.
+    await deliver({ k: "mh", id: "cum1", n: 115, meta: { kind: "video", name: "v.mp4" } });
+    for (let i = 0; i < 115; i++) await deliver({ k: "mc", id: "cum1", i, d: BIG64 });
+    expect((relay as any).mediaAsm.has(PEER + ":cum1")).toBe(false); // abortat înainte de a completa
+    expect(mockState.receiveMessage).not.toHaveBeenCalled();
+    expect(mockMedia.writeMedia).not.toHaveBeenCalled();
+  });
+
+  it("POZITIV — un transfer media normal se finalizează (gărzile nu strică calea validă)", async () => {
+    open();
+    await deliver({ k: "mh", id: "ok1", n: 2, meta: { kind: "image", name: "p.jpg" } });
+    await deliver({ k: "mc", id: "ok1", i: 0, d: "AAAA" });
+    await deliver({ k: "mc", id: "ok1", i: 1, d: "BBBB" });
+    expect(mockState.receiveMessage).toHaveBeenCalled();       // asamblat + livrat
+    expect((relay as any).mediaAsm.has(PEER + ":ok1")).toBe(false); // curățat după finalizare
   });
 });

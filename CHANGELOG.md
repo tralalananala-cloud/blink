@@ -3,6 +3,24 @@
 All notable changes to Blink. User-visible versioning; the **1:1** message format stays
 compatible across versions — **you update without reinstalling and without re-scanning a QR code**.
 
+## [1.5.2] — 2026-07-17 · Security hardening (independent audit)
+
+A security-only release following an independent audit of the app, the relay and the site.
+No wire-format change — you update on top, keep your identity and conversations, no QR re-scan.
+
+### Security
+- **Bundle signature now mandatory (stricter anti-MITM).** Establishing a session rejects any
+  contact bundle whose full-bundle signature (`lsSig`, binding every prekey — including the
+  post-quantum Kyber key — to your identity) is missing or invalid. Every current build already
+  signs it, so this only closes the door on tampered bundles.
+- **Incoming media is now capped on the receiving side.** A malicious contact can no longer
+  announce an absurd chunk count or stream oversized/overflowing chunks to fill your disk or RAM —
+  transfers past the size limit are refused up front and aborted mid-stream.
+- **Relay throttles connection/registration floods per IP**, raising the cost of mass-registering
+  throwaway identities against the relay.
+- **Website ships strict security headers** (Content-Security-Policy, `X-Frame-Options: DENY`,
+  `nosniff`, Referrer-Policy, Permissions-Policy) — defense-in-depth and clickjacking protection.
+
 ## [1.5.1] — 2026-07-15 · Bluetooth reliability + Reticulum in the background
 
 Fixes and refinements on top of 1.5.0. No wire-format change — you update on top, keep your
